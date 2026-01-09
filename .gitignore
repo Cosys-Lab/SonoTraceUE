@@ -76,3 +76,4 @@ DerivedDataCache/*
 /.vsconfig
 /.idea/*
 .editorconfig
+/Plugins/*
