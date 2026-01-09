@@ -1,0 +1,336 @@
+// By Wouter Jansen & Jan Steckel, Cosys-Lab, University of Antwerp. See the LICENSE file for details.
+
+#include "/Engine/Private/Common.ush"
+#include "/Engine/Private/Hash.ush"
+#include "/Engine/Private/RayTracing/RayTracingCommon.ush"
+#include "/Engine/Private/RayTracing/RayTracingHitGroupCommon.ush"
+#include "/Engine/Private/RayTracing/RayTracingDebugUtils.ush"
+
+static const uint MaxEmitterCount = 32; // needs to match MaxEmitterCount in SonoTrace.h
+
+struct FStructuredOutputBufferElem
+{
+	bool	IsHit;
+	float   HitPosX;
+	float   HitPosY;
+	float   HitPosZ;
+	float   HitReflectionX;
+	float   HitReflectionY;
+	float   HitReflectionZ;
+	int     HitScenePrimitiveIndex;
+	int     HitTriangleIndex;
+	float   RayDistanceTotal;
+	bool    HitLineOfSightToSensor;
+	int    DirectPath;
+	float   DistancesFromEmitterTotal[MaxEmitterCount]; 
+};
+
+RaytracingAccelerationStructure TLAS;
+uint MaxBounces;
+uint EmitterCount;
+uint DistributionRayCount;
+RWStructuredBuffer<float1> AzimuthAnglesBuffer;
+RWStructuredBuffer<float1> ElevationAnglesBuffer;
+RWStructuredBuffer<float1> SensorConfigurationBuffer;
+RWStructuredBuffer<FStructuredOutputBufferElem> OutputBuffer;
+// RayGen Shader
+RAY_TRACING_ENTRY_RAYGEN(SonoTraceRGS)
+{
+	uint1 RayIndex = DispatchRaysDimensions().x * DispatchRaysIndex().y + DispatchRaysIndex().x;
+
+	// Sensor Pose in Unreal World coordinate frame
+	float3 SensorPosition = float3(
+		SensorConfigurationBuffer[0], // X
+		SensorConfigurationBuffer[1], // Y
+		SensorConfigurationBuffer[2]); // Z
+	float3 SensorRotation = float3(
+		radians(-SensorConfigurationBuffer[3]), // Roll
+		radians(-SensorConfigurationBuffer[4]), // Pitch
+		radians(SensorConfigurationBuffer[5])); // Yaw
+	float MaxDistance = SensorConfigurationBuffer[6];
+	float3 EmitterPositionsInTLAS[MaxEmitterCount]; // Array to store emitter positions in camera world coordinates
+	float DistanceFromEmitterSoFar[MaxEmitterCount];
+	for (int EmitterIndex = 0; EmitterIndex < EmitterCount; EmitterIndex++)
+	{
+		EmitterPositionsInTLAS[EmitterIndex] = float3(
+			SensorConfigurationBuffer[7 + EmitterIndex * 3], // X 
+			SensorConfigurationBuffer[7 + EmitterIndex * 3 + 1], // Y
+			SensorConfigurationBuffer[7 + EmitterIndex * 3 + 2]) // Z
+		 - DFHackToFloat(PrimaryView.WorldCameraOrigin);
+		DistanceFromEmitterSoFar[EmitterIndex] = 0;
+	}		
+
+	// Get Azimuth and Elevation Angles in Unreal world coordinate frame
+	float Azimuth = AzimuthAnglesBuffer[RayIndex];
+	float Elevation = ElevationAnglesBuffer[RayIndex];
+	
+	// Compute a direction in local coordinates in the Unreal world coordinate frame
+	float3 LocalRayDirection = normalize(float3(
+		cos(Elevation) * cos(Azimuth),
+		cos(Elevation) * sin(Azimuth),
+		sin(Elevation)
+	));
+	
+	float4x4 YawMatrix = float4x4(
+		cos(SensorRotation.z), -sin(SensorRotation.z), 0, 0,  
+		sin(SensorRotation.z),  cos(SensorRotation.z), 0, 0,  
+		0,            0,           1, 0,   
+		0,            0,           0, 1    
+	);
+
+	float4x4 PitchMatrix = float4x4(
+		cos(SensorRotation.y),  0, sin(SensorRotation.y),  0, 
+		0,             1, 0,             0,
+		-sin(SensorRotation.y), 0, cos(SensorRotation.y),  0,
+		0,             0, 0,             1  
+	);
+
+	float4x4 RollMatrix = float4x4(
+		1, 0,             0,              0,
+		0, cos(SensorRotation.x), -sin(SensorRotation.x),   0,
+		0, sin(SensorRotation.x),  cos(SensorRotation.x),   0, 
+		0, 0,             0,              1
+	);
+
+	float4x4 RotationMatrix = mul(YawMatrix, mul(PitchMatrix, RollMatrix));
+
+	float4 LocalRayDirection4D = float4(LocalRayDirection, 1.0);
+
+	float4 TransformedRay4D = mul(RotationMatrix, LocalRayDirection4D);
+
+	float3 WorldRayDirection = normalize(TransformedRay4D.xyz); // Normalize it
+
+	// Check RayDirectionWorld.xyz contains a valid normalized vector in Unreal world coordinate frame
+	if (any(isnan(WorldRayDirection)) || any(isinf(WorldRayDirection)))
+	{
+		// Handling error case
+		WorldRayDirection = float3(0, 0, 1);  // Default direction
+	}
+
+	// Convert to camera world coordinates to match TLAS
+	float3 SensorPositionInTLAS = SensorPosition - DFHackToFloat(PrimaryView.WorldCameraOrigin);
+
+	// Start multi-bounce tracing
+	float3 CurrentOrigin = SensorPositionInTLAS;
+	float3 CurrentDirection = WorldRayDirection;
+	float RayTotalDistanceSoFar = 0.0f;
+
+	// Normal operation where rays are distributed one equal-distance in the sensor frustum and the reflection system
+	// is executed
+	if (RayIndex < DistributionRayCount)
+	{
+		for (int BounceIndex = 0; BounceIndex < MaxBounces; BounceIndex++)
+		{
+			// Compute the output index for this ray and this bounce
+			uint OutputIndex = RayIndex * MaxBounces + BounceIndex;
+			
+			// Setup ray
+			FRayDesc Ray;
+			Ray.Origin = CurrentOrigin;
+			Ray.Direction = CurrentDirection;
+			Ray.TMin = 0.0f;
+			Ray.TMax = MaxDistance;
+		
+			// Setup raytracing
+			uint RayFlags = RAY_FLAG_CULL_BACK_FACING_TRIANGLES;
+		
+			FRayTracingDebugPayload Payload = (FRayTracingDebugPayload)0; // Reset payload each bounce
+			Payload.SetMiss();
+
+			TraceRay(
+			TLAS,
+			RayFlags,
+			RAY_TRACING_MASK_ALL,
+			0,                      // SBTRecordOffset
+			RAY_TRACING_NUM_SHADER_SLOTS, // Shader slot index
+			0,                      // Miss shader index
+			Ray.GetNativeDesc(),
+			Payload);
+		
+			// Check the hit result
+			if (Payload.HitT > 0.0f)
+			{
+				float3 ReflectionDirection = normalize(reflect(Ray.Direction, Payload.WorldNormal));	
+				float3 HitPos = Ray.Origin + Ray.Direction * Payload.HitT;
+				float3 HitPosInCameraFrame = HitPos + DFHackToFloat(PrimaryView.WorldCameraOrigin);
+				RayTotalDistanceSoFar = RayTotalDistanceSoFar + Payload.HitT;
+				
+				OutputBuffer[OutputIndex].IsHit = true;
+				OutputBuffer[OutputIndex].HitScenePrimitiveIndex = Payload.ScenePrimitiveIndex;
+				OutputBuffer[OutputIndex].HitTriangleIndex = Payload.TriangleIndex;
+				OutputBuffer[OutputIndex].HitPosX = HitPosInCameraFrame.x;
+				OutputBuffer[OutputIndex].HitPosY = HitPosInCameraFrame.y;
+				OutputBuffer[OutputIndex].HitPosZ = HitPosInCameraFrame.z;
+				OutputBuffer[OutputIndex].HitReflectionX = ReflectionDirection.x;
+				OutputBuffer[OutputIndex].HitReflectionY = ReflectionDirection.y;
+				OutputBuffer[OutputIndex].HitReflectionZ = ReflectionDirection.z;
+				OutputBuffer[OutputIndex].RayDistanceTotal = RayTotalDistanceSoFar;
+				OutputBuffer[OutputIndex].DirectPath = 0;
+
+				// Calculate the total distance from each emitter to the current hit
+				// Only for the first bounce the distance is different based on the emitter position
+				if (BounceIndex == 0)
+				{
+					for (int EmitterIndex = 0; EmitterIndex < EmitterCount; EmitterIndex++)
+					{
+						float DistanceFromEmitter = length(HitPos - EmitterPositionsInTLAS[EmitterIndex]);
+						DistanceFromEmitterSoFar[EmitterIndex] = DistanceFromEmitter;
+						if (isnan(DistanceFromEmitter))
+						{
+							// TODO: Figure out why sometimes NaN
+							OutputBuffer[OutputIndex].IsHit = false;
+						}else
+						{
+							OutputBuffer[OutputIndex].DistancesFromEmitterTotal[EmitterIndex] = DistanceFromEmitter;
+						}		
+					}
+				}else
+				{
+					for (int EmitterIndex = 0; EmitterIndex < EmitterCount; EmitterIndex++)
+					{
+						float CurrentDistanceFromEmitter = DistanceFromEmitterSoFar[EmitterIndex];
+						if (isnan(CurrentDistanceFromEmitter))
+						{
+							// TODO: Figure out why sometimes NaN
+							OutputBuffer[OutputIndex].IsHit = false;
+						}else
+						{
+							OutputBuffer[OutputIndex].DistancesFromEmitterTotal[EmitterIndex] = CurrentDistanceFromEmitter + Payload.HitT;
+						}						
+					}
+				}
+				
+				// Update for next bounce
+				CurrentOrigin = HitPos;
+				CurrentDirection = ReflectionDirection;
+
+				if (BounceIndex > 0) // Skip LOS check for the first bounce
+				{
+					// Setup ray
+					FRayDesc LOSRay;
+					LOSRay.Origin = CurrentOrigin;
+					LOSRay.Direction = normalize(SensorPositionInTLAS - CurrentOrigin);
+					LOSRay.TMin = 0.0f;
+					LOSRay.TMax = length(SensorPositionInTLAS - CurrentOrigin);
+
+					uint RayFlagsLOS = RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH;
+					
+					FRayTracingDebugPayload PayloadLOS = (FRayTracingDebugPayload)0; 
+					PayloadLOS.SetMiss();	
+					TraceRay(
+					TLAS,
+					RayFlagsLOS,
+					RAY_TRACING_MASK_ALL,
+					0,                      
+					RAY_TRACING_NUM_SHADER_SLOTS, 
+					0,                
+					LOSRay.GetNativeDesc(),
+					PayloadLOS);
+					
+					if (PayloadLOS.HitT > 0.0f)
+					{
+						OutputBuffer[OutputIndex].HitLineOfSightToSensor = false;
+					}else
+					{
+						OutputBuffer[OutputIndex].HitLineOfSightToSensor = true;
+					}
+				}else {
+					OutputBuffer[OutputIndex].HitLineOfSightToSensor = true;
+				}
+			}else {
+				// No hit: Set IsHit = false for the rest of the bounces
+				for (int i = BounceIndex; i < MaxBounces; i++)
+				{
+					uint RemainingOutputIndex = RayIndex * MaxBounces + i;
+					OutputBuffer[RemainingOutputIndex].IsHit = false;
+				}
+				break;
+			}		
+		}
+	// The secondary optional component where there is a LOS check between the sensor and the receivers to see
+	// if there is a direct path between them
+	}else{
+		// Compute the output index for this ray and this bounce
+		uint OutputIndex = RayIndex * MaxBounces;
+
+		// Setup ray
+		FRayDesc Ray;
+		Ray.Origin = CurrentOrigin;
+		Ray.Direction = CurrentDirection;
+		Ray.TMin = 0.0f;
+		Ray.TMax = MaxDistance;
+	
+		// Setup raytracing
+		uint RayFlags = RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH;
+	
+		FRayTracingDebugPayload Payload = (FRayTracingDebugPayload)0; // Reset payload each bounce
+		Payload.SetMiss();
+
+		TraceRay(
+		TLAS,
+		RayFlags,
+		RAY_TRACING_MASK_ALL,
+		0,                      // SBTRecordOffset
+		RAY_TRACING_NUM_SHADER_SLOTS, // Shader slot index
+		0,                      // Miss shader index
+		Ray.GetNativeDesc(),
+		Payload);
+
+		// Check the hit result, if empty, that is good cause that means that there is LOS
+		if (Payload.HitT <= 0.0f)
+		{
+			float3 HitPosInCameraFrame = Ray.Origin + DFHackToFloat(PrimaryView.WorldCameraOrigin);
+			
+			OutputBuffer[OutputIndex].IsHit = true;
+			OutputBuffer[OutputIndex].HitScenePrimitiveIndex = -1;
+			OutputBuffer[OutputIndex].HitTriangleIndex = -1;
+			OutputBuffer[OutputIndex].HitPosX = HitPosInCameraFrame.x;
+			OutputBuffer[OutputIndex].HitPosY = HitPosInCameraFrame.y;
+			OutputBuffer[OutputIndex].HitPosZ = HitPosInCameraFrame.z;
+			OutputBuffer[OutputIndex].HitReflectionX = Ray.Direction.x;
+			OutputBuffer[OutputIndex].HitReflectionY = Ray.Direction.y;
+			OutputBuffer[OutputIndex].HitReflectionZ = Ray.Direction.z;
+			OutputBuffer[OutputIndex].RayDistanceTotal = -1;
+			OutputBuffer[OutputIndex].DirectPath = 1;			
+		}else
+		{
+			// if there is a hit result, save the result so it can be used later to see if there is LOS
+			float3 HitPos = Ray.Origin + Ray.Direction * Payload.HitT;
+			float3 HitPosInCameraFrame = HitPos + DFHackToFloat(PrimaryView.WorldCameraOrigin);
+			RayTotalDistanceSoFar = RayTotalDistanceSoFar + Payload.HitT;				
+			OutputBuffer[OutputIndex].IsHit = false;
+			OutputBuffer[OutputIndex].HitScenePrimitiveIndex = -1;
+			OutputBuffer[OutputIndex].HitTriangleIndex = -1;
+			OutputBuffer[OutputIndex].HitPosX = HitPosInCameraFrame.x;
+			OutputBuffer[OutputIndex].HitPosY = HitPosInCameraFrame.y;
+			OutputBuffer[OutputIndex].HitPosZ = HitPosInCameraFrame.z;
+			OutputBuffer[OutputIndex].HitReflectionX = Ray.Direction.x;
+			OutputBuffer[OutputIndex].HitReflectionY = Ray.Direction.y;
+			OutputBuffer[OutputIndex].HitReflectionZ = Ray.Direction.z;
+			OutputBuffer[OutputIndex].RayDistanceTotal = Payload.HitT;
+			OutputBuffer[OutputIndex].DirectPath = 1;		
+		}
+
+		// No hit: Set IsHit = false for the rest of the bounce fields
+		for (int i = 1; i < MaxBounces; i++)
+		{
+			uint RemainingOutputIndex = RayIndex * MaxBounces + i;
+			OutputBuffer[RemainingOutputIndex].IsHit = false;
+		}
+	}
+}
+
+RAY_TRACING_ENTRY_MISS(SonoTraceMS, FRayTracingDebugPayload, Payload)
+{
+	Payload.SetMiss();
+}
+
+RAY_TRACING_ENTRY_CLOSEST_HIT(SonoTraceCHS, FRayTracingDebugPayload, Payload, FRayTracingIntersectionAttributes, Attributes)
+{
+	Payload.HitT = RayTCurrent();
+
+	Payload.TriangleIndex = PrimitiveIndex();
+	const int ScenePrimitiveIndex = GetInstanceUserData();
+	Payload.ScenePrimitiveIndex = ScenePrimitiveIndex;
+	Payload.WorldNormal = GetGeometryNormalFromTriangleBaseAttributes(PrimitiveIndex());
+}

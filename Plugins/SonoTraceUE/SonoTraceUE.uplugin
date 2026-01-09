@@ -1,0 +1,35 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0",
+	"FriendlyName": "SonoTraceUE Plugin",
+	"Description": "SonoTraceUE Plugin",
+	"Category": "Other",
+	"CreatedBy": "Wouter Jansen & Jan Steckel, Cosys-Lab, University of Antwerp",
+	"CreatedByURL": "cosyslab.uantwerpen.be",
+	"DocsURL": "",
+	"MarketplaceURL": "",
+	"SupportURL": "",
+	"CanContainContent": true,
+	"IsBetaVersion": false,
+	"IsExperimentalVersion": false,
+	"Installed": false,
+	"Modules": [
+		{
+			"Name": "SonoTraceUE",
+			"Type": "Runtime",
+			"LoadingPhase": "PostConfigInit"
+		},
+		{
+			"Name": "ObjectDeliverer",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	],
+	"Plugins": [
+		{
+		"Name": "GeometryScripting",
+		"Enabled": true
+		}
+	]
+}
