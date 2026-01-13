@@ -94,6 +94,16 @@ All coordinates use **centimeters** unless otherwise specified.
 - Set `PointsInSensorFrame = true` for ego-centric coordinates (robotics applications)
 - Set `PointsInSensorFrame = false` for world-space coordinates
 
+
+### Directivity Model
+We implemented a simple directivity model that accounts for the fact that real-world transducers—whether biological (bat mouths and ears) or technical (speakers and microphones)—do not emit or receive sound equally in all directions. 
+Instead of treating them as perfect omnidirectional spheres, the model abstracts it into a single tunable parameter. 
+This allows the sensitivity pattern to transition smoothly from a uniform sphere to a focused, forward-facing shape, such as a cardioid pattern.
+The Unreal Engine standardizes the X-axis of every actor as its "forward" direction, we do the same for the receiver and emitter. So take note of this if you enable directivity!  
+During the raytracing simulation process, a weighting factor is applied based on the alignment between the ray's trajectory and this forward axis. 
+For the emitter, this calculation occurs at the moment of launch and the first reflection (the first bounce), attenuating rays that exit sideways or backwards relative to the source. 
+For the receiver, the calculation occurs upon arrival, dampening reflections that hit the sensor from extreme angles. 
+
 ### Creating new emitter signals
 
 Emitter signals are defined as `FloatCurve` objects. You can load them in from CSV files. To do so, drag in a CSV file into the content browser and choose the `FloatCurve` class. An example CSV file can be found [here](/TestData/EmitterSignal_Generated_eRTIS_Sweep_25_80.csv).
@@ -435,6 +445,18 @@ TArray<int32> DefaultEmitterSignalIndexes
 ```
 Specifies which signal each emitter uses. Must match the number of emitters. If empty, all emitters default to signal index 0.
 
+```cpp
+UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Configuration|Emitter")
+bool EnableEmitterDirectivity
+```
+Toggle the source directivity calculation.
+
+```cpp
+UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Configuration|Emitter", meta=(ClampMin=0, ClampMax=1))
+TArray<float> EmitterDirectivity
+```
+Source directivity for each emitter. For example: 0.0=Omni, 0.5=Cardioid, 1.0=Cosine (Spotlight).
+
 ### Receiver Configuration
 
 ```cpp
@@ -482,6 +504,18 @@ UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Configuration|Receivers")
 TArray<FVector> ReceiverPositions
 ```
 Manually defined receiver positions.
+
+```cpp
+UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Configuration|Receivers")
+bool EnableReceiverDirectivity = true
+```
+Toggle the receiver directivity calculation.
+
+```cpp
+UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Configuration|Receivers", meta=(ClampMin=0, ClampMax=1))
+TArray<float> ReceiverDirectivity
+```
+Receiver directivity. For example: 0.0=Omni, 0.5=Cardioid, 1.0=Cosine (Spotlight).
 
 ---
 
@@ -970,6 +1004,7 @@ Color mode for point visualization:
 - `SensorDistance`: Colors by distance to sensor
 - `Strength`: Colors by reflection strength
 - `Curvature`: Colors by surface curvature at reflection point
+- 'EmitterDirectivity': Colors by the calculated emitter directivity at the reflection point
 
 ---
 
@@ -1014,6 +1049,62 @@ Color map for data-driven coloring:
 
 ---
 
+```cpp
+UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Draw|Details")
+bool DrawPointsTotalDistanceMaximumAutoScale
+```
+Enable auto-scaling of the maximum value to normalize the data when in total distance mode for size or color.
+
+---
+
+```cpp
+UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Draw|Details")
+bool DrawPointsCurvatureMaximumAutoScale
+```
+Enable auto-scaling of the maximum value to normalize the data when in curvature mode for size or color.
+
+---
+
+```cpp
+UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Draw|Details")
+bool DrawPointsStrengthMaximumAutoScale
+```
+Enable auto-scaling of the maximum value to normalize the data when in strength mode for size or color.
+
+---
+
+```cpp
+UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Draw|Details")
+float DrawPointsTotalDistanceMaximumValue
+```
+The maximum value in centimeters to normalize the data when in total distance mode for size or color when not auto-scaling.
+
+---
+
+```cpp
+UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Draw|Details")
+float DrawPointsCurvatureMaximumValue
+```
+The maximum value to normalize the data when in curvature mode for size or color when not auto-scaling.
+
+---
+
+```cpp
+UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Draw|Details")
+float DrawPointsStrengthMaximumValue
+```
+The maximum value to normalize the data when in strength mode for size or color when not auto-scaling.
+
+---
+
+```cpp
+UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Draw|Details")
+int DrawPointsDirectivityEmitterIndex
+```
+The emitter index to use for plotting the emitter directivity when in directivity mode for size or color.
+
+---
+
 #### Debug Drawing
 
 The debug drawing system provides more detailed visualization for development and analysis and is running all the time.
@@ -1031,6 +1122,86 @@ UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Debug")
 bool EnableDrawDebug
 ```
 Master toggle for debug visualization.
+
+---
+
+```cpp
+UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Debug")
+bool EnableDrawDebugSensorPose
+```
+Draws sensor coordinate system.
+
+---
+
+```cpp
+UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Debug")
+bool EnableDrawDebugSensorFrustum
+```
+Draws the frustum that describes the measurement region for simulation.
+
+---
+
+```cpp
+UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Debug")
+bool EnableDrawDebugAllEmitters
+```
+Draws all the emitters as purple points.
+
+---
+
+```cpp
+UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Debug")
+bool EnableDrawDebugLoadedReceivers
+```
+Draws configured receiver positions as orange points.
+
+---
+
+```cpp
+UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Debug")
+bool EnableDrawDebugAllReceivers
+```
+Draws all receivers including pattern-generated ones as yellow points.
+
+---
+
+```cpp
+UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Debug")
+bool EnableDrawDebugSensorToReceiverLines
+```
+Draws turquoise lines between the sensor and the receivers, useful when direct path is enabled.
+
+---
+
+```cpp
+UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Debug")
+bool EnableDrawDebugDirectPathLOS
+```
+Draws green or red point on each receiver depending on if there is LOS for the direct path component calculation with a direction vector to the sensor. In case of no LOS, also draws an orange point and direction vector on the hit location that blocked that LOS.
+
+---
+
+```cpp
+UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Debug")
+bool EnableDrawDebugPoints
+```
+Draws the points of the raytracing.
+
+---
+
+```cpp
+UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Debug")
+int32 MaximumDrawDebugRaysNumber
+```
+Maximum number of rays and points to draw (0-10,000) for performance.
+
+---
+
+```cpp
+UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Debug")
+bool RandomizeDrawDebugRaysSelection
+```
+Randomizes which subset of rays are drawn. If `false`, uses fixed step size.
 
 ---
 
@@ -1070,7 +1241,7 @@ Draws rays that missed geometry in red.
 UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Debug")
 bool EnableDrawDebugMeshData
 ```
-Visualizes pre-calculated mesh analysis data (curvature, BRDF, etc.).
+Visualizes pre-calculated mesh analysis data (curvature, BRDF, etc.). Globally toggles the drawing of pre-calculated mesh data if enabled in the individual object settings.
 
 ---
 
@@ -1085,6 +1256,86 @@ Mesh data visualization mode:
 - `SurfaceMaterial`: Shows reflection strength
 - `Normal`: Shows surface normals as RGB
 - `Size`: Shows triangle size
+
+---
+
+```cpp
+UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Debug")
+int32 DrawDebugMeshMaximumPoints
+```
+The maximum points to draw for the mesh data.
+
+---
+
+```cpp
+UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Debug")
+bool RandomizeDrawDebugMeshData
+```
+Randomize the drawing selection for the mesh data. If `false`, uses fixed step size.
+
+---
+
+```cpp
+UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Debug")
+int32 DrawDebugMeshSize
+```
+Size of the points for mesh data.
+
+---
+
+```cpp
+UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Debug")
+ESonoTraceUEColorMapEnum DrawDebugMeshColorMap
+```
+Color map used for the color of the points for mesh data. Does not apply when showing surface normal.
+
+---
+
+```cpp
+UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Debug")
+FVector2D DrawDebugMeshCurvatureLimits
+```
+The minimum and maximum values to normalize the data when in curvature mode for mesh data.
+
+---
+
+```cpp
+UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Debug")
+FVector2D DrawDebugMeshOpeningAngleLimits
+```
+The minimum and maximum values to normalize the data when in opening angle mode for mesh data.
+
+---
+
+```cpp
+UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Debug")
+FVector2D DrawDebugMeshReflectionStrengthLimits
+```
+The minimum and maximum values to normalize the data when in reflection strength mode for mesh data.
+
+---
+
+```cpp
+UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Debug")
+FVector2D DrawDebugMeshTriangleSizeLimits
+```
+The minimum and maximum values to normalize the data when in surface area mode for mesh data.
+
+---
+
+```cpp
+UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Debug")
+int32 DrawDebugMeshOpeningAngleFrequencyIndex
+```
+The frequency bin index to use for the data when in opening angle mode for mesh data.
+
+---
+
+```cpp
+UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Debug")
+int32 DrawDebugMeshReflectionStrengthFrequencyIndex
+```
+The frequency bin index to use for the data when in reflection strength mode for mesh data.
 
 ---
 
@@ -1128,29 +1379,32 @@ Represents a single acoustic reflection/diffraction/transmission point.
 
 #### Fields
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `Location` | `FVector` | 3D position of point |
-| `ReflectionDirection` | `FVector` | Direction of acoustic reflection |
-| `Label` | `FName` | Object label (from component name) |
-| `Index` | `int` | Sequential point index |
-| `SummedStrength` | `float` | Total strength across all frequencies |
-| `Strengths` | `TArray<float>` | Strength values per emitter, receiver, and frequency (C++ only) |
-| `TotalDistance` | `float` | Total acoustic path length (cm) |
-| `TotalDistancesFromEmitters` | `TArray<float>` | Path length per emitter |
-| `DistanceToSensor` | `float` | Direct distance to sensor (cm) |
-| `ObjectTypeIndex` | `int` | Index into ObjectSettings array |
-| `IsHit` | `bool` | `true` if ray hit geometry |
-| `IsLastHit` | `bool` | `true` if final bounce in ray path |
-| `CurvatureMagnitude` | `float` | Surface curvature at hit point |
-| `SurfaceBRDF` | `float*` | BRDF opening angle data pointer (C++ only) |
-| `SurfaceMaterial` | `float*` | Reflection strength data pointer (C++ only) |
-| `IsSpecular` | `bool` | `true` if from specular component |
-| `IsDiffraction` | `bool` | `true` if from diffraction component |
-| `IsDirectPath` | `bool` | `true` if from direct path component |
+| Field                        | Type            | Description                                                                |
+|------------------------------|-----------------|----------------------------------------------------------------------------|
+| `Location`                   | `FVector`       | 3D position of point                                                       |
+| `ReflectionDirection`        | `FVector`       | Direction of acoustic reflection                                           |
+| `Label`                      | `FName`         | Object label (from component name)                                         |
+| `Index`                      | `int`           | Sequential point index                                                     |
+| `SummedStrength`             | `float`         | Total strength across all frequencies                                      |
+| `Strengths`                  | `TArray<TArray<TArray<float>>>` | Strength values per emitter, receiver, and frequency (C++ only)            |
+| `TotalDistance`              | `float`         | Total acoustic path length (cm)                                            |
+| `TotalDistancesFromEmitters` | `TArray<float>` | Path length per emitter                                                    |
+| `TotalDistancesToReceivers`  | `TArray<TArray<float>>` | Path length from this point to each receiver, per emitter (C++ only)       |
+| `DistanceToSensor`           | `float`         | Direct distance to sensor (cm)                                             |
+| `ObjectTypeIndex`            | `int`           | Index into ObjectSettings array                                            |
+| `IsHit`                      | `bool`          | `true` if ray hit geometry                                                 |
+| `IsLastHit`                  | `bool`          | `true` if final bounce in ray path                                         |
+| `CurvatureMagnitude`         | `float`         | Surface curvature at hit point                                             |
+| `SurfaceBRDF`                | `float*`        | BRDF opening angle data pointer (C++ only)                                 |
+| `SurfaceMaterial`            | `float*`        | Reflection strength data pointer (C++ only)                                |
+| `IsSpecular`                 | `bool`          | `true` if from specular component                                          |
+| `IsDiffraction`              | `bool`          | `true` if from diffraction component                                       |
+| `IsDirectPath`               | `bool`          | `true` if from direct path component                                       |
+| `RayIndex`                   | `int`           | The original index of the raytracing resulting in this point               |
+| `BounceIndex`                | `int`           | The bounce index of the multi-path reflections of the rays                 |
+| `EmitterDirectivities`       | `TArray<float>` | The calculated source directivity for each emitter to the first reflection |
 
-
-Note: Advanced fields like `Strengths` (per-emitter, per-receiver, per-frequency) and `SurfaceBRDF`/`SurfaceMaterial` pointers are available in C++ but not exposed to Blueprint.
+Note: Advanced fields like `Strengths` (per-emitter, per-receiver, per-frequency), `TotalDistancesToReceivers` ((per-emitter, per-receiver) and `SurfaceBRDF`/`SurfaceMaterial` pointers are available in C++ but not exposed to Blueprint.
 
 ### FSonoTraceUEGeneratedInputStruct
 
@@ -1158,17 +1412,19 @@ Contains processed/generated settings derived from InputSettings.
 
 #### Fields
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `AzimuthAngles` | `TArray<float>` | Generated ray azimuth angles |
-| `ElevationAngles` | `TArray<float>` | Generated ray elevation angles |
-| `LoadedEmitterPositions` | `TArray<FVector>` | Original loaded emitter positions |
-| `FinalEmitterPositions` | `TArray<FVector>` | Final emitter positions (after offsets) |
-| `LoadedReceiverPositions` | `TArray<FVector>` | Original loaded receiver positions |
-| `FinalReceiverPositions` | `TArray<FVector>` | Final receiver positions (after pattern generation) |
-| `ObjectSettings` | `TArray<FSonoTraceUEObjectSettingsStruct>` | Processed object acoustic settings |
-| `Frequencies` | `TArray<float>` | Simulation frequency bins |
-| `DefaultEmitterSignalIndexes` | `TArray<int32>` | Active signal index per emitter |
+| Field                         | Type | Description                                         |
+|-------------------------------|------|-----------------------------------------------------|
+| `AzimuthAngles`               | `TArray<float>` | Generated ray azimuth angles                        |
+| `ElevationAngles`             | `TArray<float>` | Generated ray elevation angles                      |
+| `LoadedEmitterPositions`      | `TArray<FVector>` | Original loaded emitter positions                   |
+| `FinalEmitterPositions`       | `TArray<FVector>` | Final emitter positions (after offsets)             |
+| `FinalEmitterDirectivities`   | `TArray<FVector>` | Final emitter directivities                         |
+| `LoadedReceiverPositions`     | `TArray<FVector>` | Original loaded receiver positions                  |
+| `FinalReceiverPositions`      | `TArray<FVector>` | Final receiver positions (after pattern generation) |
+| `FinalReceiverDirectivities`  | `TArray<FVector>` | Final receiver directivities  (after pattern generation)                       |
+| `ObjectSettings`              | `TArray<FSonoTraceUEObjectSettingsStruct>` | Processed object acoustic settings                  |
+| `Frequencies`                 | `TArray<float>` | Simulation frequency bins                           |
+| `DefaultEmitterSignalIndexes` | `TArray<int32>` | Active signal index per emitter                     |
 
 
 ## API

@@ -699,6 +699,10 @@ void ASonoTraceUEActor::SendInterfaceSettings()
         DataToSend.Append(reinterpret_cast<const uint8*>(&FinalEmitter.Y), sizeof(FinalEmitter.Y));
         DataToSend.Append(reinterpret_cast<const uint8*>(&FinalEmitter.Z), sizeof(FinalEmitter.Z));
     }
+	for (float FinalEmitterDirectivity : GeneratedSettings.FinalEmitterDirectivities)
+	{
+		DataToSend.Append(reinterpret_cast<const uint8*>(&FinalEmitterDirectivity), sizeof(FinalEmitterDirectivity));
+	}	
 	int32 LoadedReceiverCount = GeneratedSettings.LoadedReceiverPositions.Num();
 	DataToSend.Append(reinterpret_cast<uint8*>(&LoadedReceiverCount), sizeof(int32));
     for (const FVector& LoadedReceiver : GeneratedSettings.LoadedReceiverPositions)
@@ -715,6 +719,10 @@ void ASonoTraceUEActor::SendInterfaceSettings()
         DataToSend.Append(reinterpret_cast<const uint8*>(&FinalReceiver.Y), sizeof(FinalReceiver.Y));
         DataToSend.Append(reinterpret_cast<const uint8*>(&FinalReceiver.Z), sizeof(FinalReceiver.Z));
     }
+	for (float FinalReceiverDirectivity : GeneratedSettings.FinalReceiverDirectivities)
+	{
+		DataToSend.Append(reinterpret_cast<const uint8*>(&FinalReceiverDirectivity), sizeof(FinalReceiverDirectivity));
+	}	
 
     // Object settings
 	int32 ObjectSettingsCount = GeneratedSettings.ObjectSettings.Num();
@@ -1389,7 +1397,9 @@ void ASonoTraceUEActor::ParseRayTracing()
 					for (int32 RayIndex = 0; RayIndex < GeneratedSettings.AzimuthAngles.Num(); RayIndex++)
 					{
 						// Start multi-bounce loop
-						bool CurrentRayIsHitting = false;
+						bool CurrentRayIsHitting = false;						
+						TArray<float> CachedSourceDirectivities;
+						CachedSourceDirectivities.Init(1.0f, EmitterPoses.Num());						
 						for (int32 BounceIndex = 0; BounceIndex < InputSettings->MaximumBounces; BounceIndex++)
 						{
 							// Compute the output index for this ray and this bounce
@@ -1423,6 +1433,19 @@ void ASonoTraceUEActor::ParseRayTracing()
 									FVector HitReflectionDirection(CurrentRayTracingOutput.HitReflectionX,
 																   CurrentRayTracingOutput.HitReflectionY,
 																   CurrentRayTracingOutput.HitReflectionZ);
+									
+									// If this is the original transmission, calculate the angle for source directivity and cache it
+									if (InputSettings->EnableEmitterDirectivity){
+										if (BounceIndex == 0){
+											for (int32 EmitterIndex = 0; EmitterIndex < EmitterPoses.Num(); ++EmitterIndex){
+												FVector LaunchVector = (HitLocation - EmitterPoses[EmitterIndex].GetLocation()).GetSafeNormal();
+												FVector EmitterForward = EmitterPoses[EmitterIndex].GetUnitAxis(EAxis::X);
+												float Dot = FVector::DotProduct(LaunchVector, EmitterForward);																					
+												float Directivity = (1.0f - GeneratedSettings.FinalEmitterDirectivities[EmitterIndex]) + (GeneratedSettings.FinalEmitterDirectivities[EmitterIndex] * Dot);
+												CachedSourceDirectivities[EmitterIndex] = FMath::Max(0.0f, Directivity);
+											}
+										}										
+									}
 
 									const float DistanceToSensor = FVector::Distance(HitLocation, SensorLocation);
 									FName ObjectName = "UNKNOWN";
@@ -1499,7 +1522,10 @@ void ASonoTraceUEActor::ParseRayTracing()
 																													ObjectTypeIndex,
 																													CurvatureMagnitude,
 																													SurfaceBRDF,
-																													SurfaceMaterial);
+																													SurfaceMaterial,
+																													RayIndex,
+																													BounceIndex,
+																													CachedSourceDirectivities);
 									SavedPointIndex++;
 									if (CurvatureMagnitude > RayTracingSubOutput.MaximumCurvature)
 										RayTracingSubOutput.MaximumCurvature = CurvatureMagnitude;
@@ -1627,12 +1653,32 @@ void ASonoTraceUEActor::RunSimulation(const TArray<int32> OverrideEmitterSignalI
 					{						
 						// Calculate the normalized direction vector from the reflection point to the receiver
 						FVector VecReceiverToReflection = (ReceiverPose.GetLocation() - ReflectedPoint.Location).GetSafeNormal();
+						
+						// Calculate receiver directivity strength (Weight = (1-P) + P*cos(theta))
+						float ReceiverDirectivity = 1.0f;
+						if (InputSettings->EnableReceiverDirectivity)
+						{
+							const float RecDot = FVector::DotProduct(-VecReceiverToReflection, ReceiverPose.GetUnitAxis(EAxis::X));							
+							 ReceiverDirectivity = (1.0f - GeneratedSettings.FinalReceiverDirectivities[ReceiverIndex]) + (GeneratedSettings.FinalReceiverDirectivities[ReceiverIndex] * RecDot);
+							 ReceiverDirectivity = FMath::Max(0.0f, ReceiverDirectivity);
+						}
 		
 						// Calculate the angle of reflection (in degrees)
 						const float AngleReflection = FMath::RadiansToDegrees(FMath::Acos(FVector::DotProduct(ReflectedPoint.ReflectionDirection, VecReceiverToReflection)));
 						
 						for (int32 EmitterIndex = 0; EmitterIndex < EmitterPoses.Num(); ++EmitterIndex)
-						{													
+						{					
+							
+							// Source directivity retrieval
+							float SourceDirectivity = 1.0f;
+							if (InputSettings->EnableEmitterDirectivity)
+							{
+								if (ReflectedPoint.EmitterDirectivities.IsValidIndex(EmitterIndex)) 
+								{
+									SourceDirectivity = ReflectedPoint.EmitterDirectivities[EmitterIndex];
+								}
+							}
+							
 							// Calculate distance to receiver and add it to the total path length (in centimeters)
 							const float TotalDistanceToSensor = ReflectedPoint.TotalDistancesFromEmitters[EmitterIndex] + FVector::Distance(ReflectedPoint.Location, ReceiverPose.GetLocation());
 							ReflectedPoint.TotalDistancesToReceivers[EmitterIndex][ReceiverIndex] = TotalDistanceToSensor;
@@ -1651,7 +1697,7 @@ void ASonoTraceUEActor::RunSimulation(const TArray<int32> OverrideEmitterSignalI
 								const float AlphaAbsorption = 0.038 * (GeneratedSettings.Frequencies[FrequencyIndex] / 1000) - 0.3;
 								const float PathlossAbsorption = FMath::Pow(10.0f, -(AlphaAbsorption * ReflectedPoint.TotalDistance / 100) / 20);
 								const float ReflectionStrengthBRDF = exp( (SurfaceBRDFExponent * (AngleReflection - 180 )) * (SurfaceBRDFExponent * (AngleReflection - 180 )));
-								const float Strength = ReflectionStrengthBRDF * ReflectionStrengthPathLoss * SurfaceMaterial * PathlossAbsorption;
+								const float Strength = ReflectionStrengthBRDF * ReflectionStrengthPathLoss * SurfaceMaterial * PathlossAbsorption * ReceiverDirectivity * SourceDirectivity;								
 								ReflectedPoint.Strengths[EmitterIndex][ReceiverIndex][FrequencyIndex] = Strength;
 								ReflectedPoint.SummedStrength += Strength * Strength;
 							}
@@ -2059,7 +2105,7 @@ void ASonoTraceUEActor::RunSimulation(const TArray<int32> OverrideEmitterSignalI
 			const FName Label = FName(*(FString::Printf(TEXT("DIRECT_EMITTER_%d"), EmitterIndex)));
 			const float SensorDistance = FVector::Distance(EmitterPoses[EmitterIndex].GetLocation(), SensorLocation);
 			FSonoTraceUEPointStruct DirectPathPoint = FSonoTraceUEPointStruct(EmitterPoses[EmitterIndex].GetLocation(), SensorRotation.Vector(), Label, EmitterIndex,
-																				SensorDistance, SensorDistance, SummedStrength, TotalDistancesToReceivers, Strengths);
+																			  SensorDistance, SensorDistance, SummedStrength, TotalDistancesToReceivers, Strengths);
 			if (InputSettings->PointsInSensorFrame)
 			{    
 				DirectPathPoint.Location = WorldToSensorTransform.TransformPosition(DirectPathPoint.Location);
@@ -2792,6 +2838,10 @@ void ASonoTraceUEActor::DrawSimulationResult()
 							break;
 						case ESonoTraceUESimulationDrawColorModeEnum::TotalDistance:{}
 							NormalizedValueForColor = FMath::Clamp( FMath::RoundToInt(Point.TotalDistance / DrawPointsTotalDistanceMaximumValue * 255.0f), 0, 254);
+							PointColor = ColorMap[NormalizedValueForColor];
+							break;
+						case ESonoTraceUESimulationDrawColorModeEnum::EmitterDirectivity:{}
+							NormalizedValueForColor = FMath::Clamp( FMath::RoundToInt(Point.EmitterDirectivities[InputSettings->DrawPointsDirectivityEmitterIndex] / 1 * 255.0f), 0, 254);
 							PointColor = ColorMap[NormalizedValueForColor];
 							break;
 						default:
@@ -3749,19 +3799,48 @@ FSonoTraceUEGeneratedInputStruct ASonoTraceUEActor::GenerateInputSettings(const 
 		}
 		GeneratedInputSettings.EmitterSignals[EmitterSignalIndex] = EmitterSignal;
 	}
+	
+	
+	TArray<float> LoadedEmitterDirectivity;
+	if(InputSettings->EnableEmitterDirectivity && InputSettings->EmitterDirectivity.Num() != GeneratedInputSettings.LoadedEmitterPositions.Num())
+	{
+		UE_LOG(SonoTraceUE, Error, TEXT("Emitter directivity is enabled and the directivity values do not match the amount of emitters. Setting all to 0 (omnidirectional)."));
+		LoadedEmitterDirectivity.Empty();
+		LoadedEmitterDirectivity.Init(0.0f, GeneratedInputSettings.LoadedEmitterPositions.Num());
+	}else
+	{
+		LoadedEmitterDirectivity.Empty();
+		LoadedEmitterDirectivity.Append(InputSettings->EmitterDirectivity);
+	}
+	
+	TArray<float> LoadedReceiverDirectivity;
+	if(InputSettings->EnableReceiverDirectivity && InputSettings->ReceiverDirectivity.Num() != GeneratedInputSettings.LoadedReceiverPositions.Num())
+	{
+		UE_LOG(SonoTraceUE, Error, TEXT("Receiver directivity is enabled and the directivity values do not match the amount of receivers. Setting all to 0 (omnidirectional)."));
+		LoadedReceiverDirectivity.Empty();
+		LoadedReceiverDirectivity.Init(0.0f, GeneratedInputSettings.LoadedReceiverPositions.Num());
+	}else
+	{
+		LoadedReceiverDirectivity.Empty();
+		LoadedReceiverDirectivity.Append(InputSettings->ReceiverDirectivity);
+	}
 
 	for (int32 EmitterIndex = 0; EmitterIndex < GeneratedInputSettings.LoadedEmitterPositions.Num(); ++EmitterIndex)
 	{
 		GeneratedInputSettings.FinalEmitterPositions.Add(GeneratedInputSettings.LoadedEmitterPositions[EmitterIndex] + InputSettings->EmitterPositionsOffset);
 	}
+	GeneratedInputSettings.FinalEmitterDirectivities.Empty();
+	GeneratedInputSettings.FinalEmitterDirectivities.Append(LoadedEmitterDirectivity);	
 
 	if(InputSettings->EnableEmitterPatternSimulation)
 	{
 		TArray<FVector> CircularArrayOffsets = GenerateCircularArray(InputSettings->EmitterPatternSpacing, InputSettings->EmitterPatternRadius, InputSettings->EmitterPatternHexagonalLattice, InputSettings->EmitterPatternPlane);
 		
 		GeneratedInputSettings.FinalReceiverPositions.Empty();
+		GeneratedInputSettings.FinalReceiverDirectivities.Empty();
 		for (int i = 0; i < GeneratedInputSettings.LoadedReceiverPositions.Num(); i++)
 		{
+			GeneratedInputSettings.FinalReceiverDirectivities.Add(LoadedReceiverDirectivity[i]);
 			FVector CurrentReceiverOffset = GeneratedInputSettings.LoadedReceiverPositions[i];
 			for (int j = 0; j < CircularArrayOffsets.Num(); j++)
 				GeneratedInputSettings.FinalReceiverPositions.Add(CurrentReceiverOffset + CircularArrayOffsets[j] + InputSettings->ReceiverPositionsOffset);
@@ -3771,6 +3850,8 @@ FSonoTraceUEGeneratedInputStruct ASonoTraceUEActor::GenerateInputSettings(const 
 		{
 			GeneratedInputSettings.FinalReceiverPositions.Add(GeneratedInputSettings.LoadedReceiverPositions[ReceiverIndex] + InputSettings->ReceiverPositionsOffset);
 		}
+		GeneratedInputSettings.FinalReceiverDirectivities.Empty();
+		GeneratedInputSettings.FinalReceiverDirectivities.Append(LoadedReceiverDirectivity);	
 	}	
 
 	if (InputSettings->NumberOfInitialRays < 0)
@@ -3801,7 +3882,7 @@ FSonoTraceUEGeneratedInputStruct ASonoTraceUEActor::GenerateInputSettings(const 
 				UE_LOG(SonoTraceUE, Error, TEXT("Invalid default emitter signal index %i for emitter #%i. Setting it to 0."), InputSettings->DefaultEmitterSignalIndexes[EmitterSignalArrayIndex], EmitterSignalArrayIndex );
 			}
 		}	
-	}	
+	}		
 	return GeneratedInputSettings;
 }
 
@@ -4221,6 +4302,16 @@ TArray<uint8> ASonoTraceUEActor::SerializePointStruct(FSonoTraceUEPointStruct* P
 	Writer << PointStruct->IsSpecular;
 	Writer << PointStruct->IsDiffraction;
 	Writer << PointStruct->IsDirectPath;
+	Writer << PointStruct->RayIndex;
+	Writer << PointStruct->BounceIndex;
+	
+	int32 TotalEmitterDirectivitiesCount = PointStruct->EmitterDirectivities.Num();
+	Writer << TotalEmitterDirectivitiesCount;
+	
+	for (float EmitterDirectivity : PointStruct->EmitterDirectivities)
+	{
+		Writer << EmitterDirectivity;
+	}	
 
 	for (const TArray<TArray<float>>& EmitterRow : PointStruct->Strengths)
 	{

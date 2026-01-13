@@ -4,6 +4,7 @@ All notable changes to this project will be documented in this file.
 
 ## [dev]
 - Added SceneCapture to Pawn and retrieved camera capture to place into DataMessage example.
+- Added emitter and receiver simple directivity model.
 
 ## [Released]
 
