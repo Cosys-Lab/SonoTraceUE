@@ -1175,6 +1175,7 @@ Contains processed/generated settings derived from InputSettings.
 
 A socket-based API is available to access SonoTraceUE with third-party tools. 
 Currently a Matlab Client API is available [here](https://github.com/Cosys-Lab/SonoTraceUE-Matlab-Toolbox). You will find more information there on how to control the simulation from the API client.
+The _Default_ example level in the sample project is ideal for testing with example code in the Client API tools.
 
 The `USonoTraceUEInterfaceSettingsData` class configures the TCP/IP network interface for external control and data acquisition.
 

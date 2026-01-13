@@ -2,6 +2,9 @@
 All notable changes to this project will be documented in this file.
 
 
+## [dev]
+- Added SceneCapture to Pawn and retrieved camera capture to place into DataMessage example.
+
 ## [Released]
 
 ## [1.0.0] - 2026-01-09
