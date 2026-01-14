@@ -3830,7 +3830,7 @@ FSonoTraceUEGeneratedInputStruct ASonoTraceUEActor::GenerateInputSettings(const 
 		GeneratedInputSettings.FinalEmitterPositions.Add(GeneratedInputSettings.LoadedEmitterPositions[EmitterIndex] + InputSettings->EmitterPositionsOffset);
 	}
 	GeneratedInputSettings.FinalEmitterDirectivities.Empty();
-	GeneratedInputSettings.FinalEmitterDirectivities.Append(LoadedEmitterDirectivity);	
+	if(InputSettings->EnableEmitterDirectivity)GeneratedInputSettings.FinalEmitterDirectivities.Append(LoadedEmitterDirectivity);	
 
 	if(InputSettings->EnableEmitterPatternSimulation)
 	{
@@ -3840,10 +3840,12 @@ FSonoTraceUEGeneratedInputStruct ASonoTraceUEActor::GenerateInputSettings(const 
 		GeneratedInputSettings.FinalReceiverDirectivities.Empty();
 		for (int i = 0; i < GeneratedInputSettings.LoadedReceiverPositions.Num(); i++)
 		{
-			GeneratedInputSettings.FinalReceiverDirectivities.Add(LoadedReceiverDirectivity[i]);
 			FVector CurrentReceiverOffset = GeneratedInputSettings.LoadedReceiverPositions[i];
 			for (int j = 0; j < CircularArrayOffsets.Num(); j++)
-				GeneratedInputSettings.FinalReceiverPositions.Add(CurrentReceiverOffset + CircularArrayOffsets[j] + InputSettings->ReceiverPositionsOffset);
+			{
+				if(InputSettings->EnableReceiverDirectivity)GeneratedInputSettings.FinalReceiverDirectivities.Add(LoadedReceiverDirectivity[i]);
+				GeneratedInputSettings.FinalReceiverPositions.Add(CurrentReceiverOffset + CircularArrayOffsets[j] + InputSettings->ReceiverPositionsOffset);				
+			}
 		}
 	}else{
 		for (int32 ReceiverIndex = 0; ReceiverIndex < GeneratedInputSettings.LoadedReceiverPositions.Num(); ++ReceiverIndex)
@@ -3851,7 +3853,7 @@ FSonoTraceUEGeneratedInputStruct ASonoTraceUEActor::GenerateInputSettings(const 
 			GeneratedInputSettings.FinalReceiverPositions.Add(GeneratedInputSettings.LoadedReceiverPositions[ReceiverIndex] + InputSettings->ReceiverPositionsOffset);
 		}
 		GeneratedInputSettings.FinalReceiverDirectivities.Empty();
-		GeneratedInputSettings.FinalReceiverDirectivities.Append(LoadedReceiverDirectivity);	
+		if(InputSettings->EnableReceiverDirectivity)GeneratedInputSettings.FinalReceiverDirectivities.Append(LoadedReceiverDirectivity);	
 	}	
 
 	if (InputSettings->NumberOfInitialRays < 0)
