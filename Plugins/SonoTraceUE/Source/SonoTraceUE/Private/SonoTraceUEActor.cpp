@@ -1700,7 +1700,7 @@ void ASonoTraceUEActor::RunSimulation(const TArray<int32> OverrideEmitterSignalI
 								const float SurfaceMaterial = (*ReflectedPoint.SurfaceMaterial)[FrequencyIndex];
 								const float AlphaAbsorption = 0.038 * (GeneratedSettings.Frequencies[FrequencyIndex] / 1000) - 0.3;
 								const float PathlossAbsorption = FMath::Pow(10.0f, -(AlphaAbsorption * ReflectedPoint.TotalDistance / 100) / 20);
-								const float ReflectionStrengthBRDF = exp( (SurfaceBRDFExponent * (AngleReflection - 180 )) * (SurfaceBRDFExponent * (AngleReflection - 180 )));
+								const float ReflectionStrengthBRDF = exp(SurfaceBRDFExponent * (AngleReflection * AngleReflection));
 								const float Strength = ReflectionStrengthBRDF * ReflectionStrengthPathLoss * SurfaceMaterial * PathlossAbsorption * ReceiverDirectivity * SourceDirectivity;								
 								ReflectedPoint.Strengths[EmitterIndex][ReceiverIndex][FrequencyIndex] = Strength;
 								ReflectedPoint.SummedStrength += Strength * Strength;
