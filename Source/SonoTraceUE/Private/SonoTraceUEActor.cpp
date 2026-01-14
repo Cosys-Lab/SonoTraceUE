@@ -621,6 +621,10 @@ void ASonoTraceUEActor::SendInterfaceSettings()
     DataToSend.Append(reinterpret_cast<const uint8*>(&InputSettings->ReceiverPositionsOffset.X), sizeof(InputSettings->ReceiverPositionsOffset.X));
     DataToSend.Append(reinterpret_cast<const uint8*>(&InputSettings->ReceiverPositionsOffset.Y), sizeof(InputSettings->ReceiverPositionsOffset.Y));
     DataToSend.Append(reinterpret_cast<const uint8*>(&InputSettings->ReceiverPositionsOffset.Z), sizeof(InputSettings->ReceiverPositionsOffset.Z));
+    
+    // Directivity settings
+    DataToSend.Append(reinterpret_cast<const uint8*>(&InputSettings->EnableEmitterDirectivity), sizeof(bool));
+    DataToSend.Append(reinterpret_cast<const uint8*>(&InputSettings->EnableReceiverDirectivity), sizeof(bool));
 
 	// Receiver settings
 	DataToSend.Append(reinterpret_cast<const uint8*>(&InputSettings->EnableStaticReceivers), sizeof(bool));
