@@ -2000,7 +2000,7 @@ void ASonoTraceUEActor::RunSimulation(const TArray<int32> OverrideEmitterSignalI
 								}
 							}
 						}
-						SummedStrength = SummedStrength / NumReceivers / NumReceivers / InputSettings->NumberOfSimFrequencies;
+						SummedStrength = SummedStrength / NumReceivers / EmitterPoses.Num() / InputSettings->NumberOfSimFrequencies;
 						if (SummedStrength > InputSettings->DiffractionMinimumStrength)
 						{
 							NewPoint.Location = PointLocation;
