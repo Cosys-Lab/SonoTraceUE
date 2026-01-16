@@ -2,13 +2,13 @@
 All notable changes to this project will be documented in this file.
 
 
-## [dev]
+## [Released]
+
+## [2.0.0] - 2026-01-16
 - Added SceneCapture to Pawn and retrieved camera capture to place into DataMessage example.
 - Added emitter and receiver simple directivity model.
 - Fixed for total summed strength for diffraction component points.
 - Fixed specular reflection direction being opposite for maximum strength.
-
-## [Released]
 
 ## [1.0.0] - 2026-01-09
 - First release.
