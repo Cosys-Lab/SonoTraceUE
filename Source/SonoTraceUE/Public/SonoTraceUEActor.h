@@ -162,6 +162,7 @@ enum class ESonoTraceUESimulationDrawColorModeEnum : uint8
 	SensorDistance UMETA(DisplayName = "Distance to sensor"),
 	Strength UMETA(DisplayName = "Strength"),
 	Curvature UMETA(DisplayName = "Curvature"),
+	EmitterDirectivity UMETA(DisplayName = "Emitter directivity"),
 };
 
 UENUM(BlueprintType)
@@ -240,6 +241,14 @@ public:
 	// If this is empty and not set, it will be set to 0 for all emitters.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE|Configuration|Emitter", meta=(EditCondition="!EnableEmitterPositionsDataTable", EditConditionHides))
 	TArray<int32> DefaultEmitterSignalIndexes;
+	
+	// Toggle the source directivity calculation
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE|Configuration|Emitter")
+	bool EnableEmitterDirectivity = false;
+	
+	// Source directivity for each emitter. For example: 0.0=Omni, 0.5=Cardioid, 1.0=Cosine (Spotlight)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE|Configuration|Emitter", meta=(ClampMin=0, ClampMax=1))
+	TArray<float> EmitterDirectivity;
 
 	// RECEIVER SETTINGS
 
@@ -267,6 +276,14 @@ public:
 	// In centimeters and using a left-handed coordinate system. For manually defining the receiver coordinates
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE|Configuration|Receivers", meta=(EditCondition="!EnableReceiverPositionsDataTable", EditConditionHides))
 	TArray<FVector> ReceiverPositions;
+	
+	// Toggle the receiver directivity calculation
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE|Configuration|Receivers")
+	bool EnableReceiverDirectivity = false;
+	
+	// Receiver directivity. For example: 0.0=Omni, 0.5=Cardioid, 1.0=Cosine (Spotlight)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE|Configuration|Receivers", meta=(ClampMin=0, ClampMax=1))
+	TArray<float> ReceiverDirectivity;	
 
 	// Simulate the circular emitter pattern on each receiver 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE|Configuration|Receivers|EmitterPattern")
@@ -544,6 +561,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE|Draw|Details", meta=(Units="Centimeters"))
 	float DrawPointsStrengthMaximumValue = 5;
 	
+	// The emitter index to use for plotting the emitter directivity  when in directivity mode for size or color
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE|Draw|Details")
+	int DrawPointsDirectivityEmitterIndex = 0;
+	
 	// DEBUG SETTINGS
 
 	// Log the execution times
@@ -677,12 +698,18 @@ struct FSonoTraceUEGeneratedInputStruct
 
 	UPROPERTY(BlueprintReadOnly, Category = "SonoTraceUE|Generatedinput")
 	TArray<FVector> FinalEmitterPositions;
+	
+	UPROPERTY(BlueprintReadOnly, Category = "SonoTraceUE|Generatedinput")
+	TArray<float> FinalEmitterDirectivities;
 
 	UPROPERTY(BlueprintReadOnly, Category = "SonoTraceUE|Generatedinput")
 	TArray<FVector> LoadedReceiverPositions;
 
 	UPROPERTY(BlueprintReadOnly, Category = "SonoTraceUE|Generatedinput")
 	TArray<FVector> FinalReceiverPositions;
+	
+	UPROPERTY(BlueprintReadOnly, Category = "SonoTraceUE|Generatedinput")
+	TArray<float> FinalReceiverDirectivities;
 
 	UPROPERTY(BlueprintReadOnly, Category = "SonoTraceUE|Generatedinput")
 	TArray<FSonoTraceUEObjectSettingsStruct> ObjectSettings;
@@ -775,11 +802,21 @@ struct FSonoTraceUEPointStruct
 
 	UPROPERTY(BlueprintReadOnly, Category = "SonoTraceUE|Point")
 	bool IsDirectPath = false;	
+	
+	UPROPERTY(BlueprintReadOnly, Category = "SonoTraceUE|Point")
+	int RayIndex = 0;	
+	
+	UPROPERTY(BlueprintReadOnly, Category = "SonoTraceUE|Point")
+	int BounceIndex = 0;		
+	
+	UPROPERTY(BlueprintReadOnly, Category = "SonoTraceUE|Point")
+	TArray<float> EmitterDirectivities;	
 
 	FSonoTraceUEPointStruct(const FVector& Location, const FVector& ReflectionDirection, const FName Label, const int Index,
-	                         const float TotalDistance, const TArray<float>& TotalDistancesFromEmitters,
-	                         const float DistanceToSensor, const int ObjectTypeIndex, const float CurvatureMagnitude,
-	                         TArray<float>* SurfaceBRDF, TArray<float>* SurfaceMaterial):
+	                        const float TotalDistance, const TArray<float>& TotalDistancesFromEmitters,
+	                        const float DistanceToSensor, const int ObjectTypeIndex, const float CurvatureMagnitude,
+	                        TArray<float>* SurfaceBRDF, TArray<float>* SurfaceMaterial,
+	                        const int RayIndex, int BounceIndex, const TArray<float>& EmitterDirectivities):
 		Location(Location),
 	    ReflectionDirection(ReflectionDirection),
 		Label(Label),
@@ -793,7 +830,10 @@ struct FSonoTraceUEPointStruct
 		IsLastHit(false),
 		CurvatureMagnitude(CurvatureMagnitude),
 		SurfaceBRDF(SurfaceBRDF),
-		SurfaceMaterial(SurfaceMaterial)
+		SurfaceMaterial(SurfaceMaterial),
+		RayIndex(RayIndex),
+		BounceIndex(BounceIndex),
+		EmitterDirectivities(EmitterDirectivities)
 	{
 	}
 
@@ -808,13 +848,16 @@ struct FSonoTraceUEPointStruct
 		CurvatureMagnitude(0),
 		SurfaceBRDF(nullptr),
 		SurfaceMaterial(nullptr),
-		IsSpecular(false)
+		IsSpecular(false),
+		RayIndex(0),
+		BounceIndex(0)
 	{
 	}
 
 	FSonoTraceUEPointStruct(const FVector& Location, const FVector& ReflectionDirection, const FName Label, const int Index,
-							 const float TotalDistance, const float DistanceToSensor, const float SummedStrength, const TArray<TArray<float>>& TotalDistancesToReceivers,
-							 const TArray<TArray<TArray<float>>>& Strengths):
+							const float TotalDistance, const float DistanceToSensor, const float SummedStrength,
+							const TArray<TArray<float>>& TotalDistancesToReceivers,
+							const TArray<TArray<TArray<float>>>& Strengths):
 		Location(Location),
 		ReflectionDirection(ReflectionDirection),
 		Label(Label),
@@ -831,7 +874,9 @@ struct FSonoTraceUEPointStruct
 		Strengths(Strengths),
 		TotalDistancesToReceivers(TotalDistancesToReceivers),
 		IsSpecular(false),
-		IsDirectPath(true)
+		IsDirectPath(true),
+		RayIndex(0),
+		BounceIndex(0)
 	{
 	}
 };
