@@ -3,8 +3,7 @@
 An Unreal Engine 5 Plugin for in-air acoustic simulation using Hardware-Accelerated Ray Tracing, an
 Unreal Engine implementation of the original [SonoTraceLab](https://github.com/Cosys-Lab/SonoTraceLab).
 
-This branch has the plugin source code and is packaged in a sample Unreal Project with some example levels for testing the plugin. 
-See other branches that only include the plugin so you can easily checkout those branches into your own Unreal projects.
+This branch has only the plugin source code. See other branches that also include a sample project. 
 
 SonoTraceUE is a high-fidelity acoustic simulation plugin for Unreal Engine 5 that leverages hardware-accelerated ray tracing to simulate ultrasonic sensor behavior in complex 3D environments. The plugin provides physically-based acoustic propagation modeling, including specular reflection, diffraction components, and direct path transmission, making it suitable for research in robotics, autonomous systems, and acoustic sensor development. It has an API extension so it can be interfaced with from a external API client. 
 
