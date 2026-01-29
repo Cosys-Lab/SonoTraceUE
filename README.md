@@ -9,10 +9,10 @@ SonoTraceUE is a high-fidelity acoustic simulation plugin for Unreal Engine 5 th
 
 ## Requirements
 
-- **Unreal Engine Version**: 5.4 or higher
+- **Unreal Engine Version**: 5.4
 - **Hardware Requirements**:
   - GPU with hardware ray tracing support
-  - DirectX 12  support
+  - DirectX 12 support
 - **Operating System**: Windows for now due to DirectX 12 requirement
 
 Hardware ray tracing **must** be enabled in Unreal Engine for this plugin to function correctly:
@@ -931,10 +931,20 @@ Draws all receivers including pattern-generated ones as yellow points.
 
 ```cpp
 UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Draw")
-bool EnableDrawDirectPathLOS
+bool EnableDrawDirectPathPoints
 ```
-Draws green/red points on receivers based on direct path line-of-sight.
+Draw a point for each receiver.
 
+---
+
+```cpp
+UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Draw")
+ESonoTraceUESimulationDrawDirectPointModeEnum DrawDirectPathPointsMode
+```
+If drawing of direct path points is enabled, choose the drawing mode:
+- `LOS`: LOS mode (green=LOS, red=no LOS)
+- `Strength`: Colors by acoustic strength. The frequency bin and emitter index can be chosen within the details settings.
+- 
 ---
 
 ```cpp
@@ -1072,6 +1082,24 @@ int DrawPointsDirectivityEmitterIndex
 The emitter index to use for plotting the emitter directivity when in directivity mode for size or color.
 
 ---
+
+```cpp
+UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Draw|Details")
+int DrawDirectPathPointStrengthEmitterIndex
+```
+If drawing of direct path points is enabled, choose which emitter is chosen to show the strength off.
+
+---
+
+
+```cpp
+UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Draw|Details")
+int DrawDirectPathPointStrengthFrequencyIndex
+```
+If drawing of direct path points is enabled, choose which frequency is chosen to show the strength off.
+
+---
+
 
 #### Debug Drawing
 

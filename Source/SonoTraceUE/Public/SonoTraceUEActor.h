@@ -155,6 +155,13 @@ enum class ESonoTraceUESimulationDrawSizeModeEnum : uint8
 };
 
 UENUM(BlueprintType)
+enum class ESonoTraceUESimulationDrawDirectPointModeEnum : uint8
+{
+	LOS UMETA(DisplayName = "LOS"),
+	Strength UMETA(DisplayName = "Strength"),
+};
+
+UENUM(BlueprintType)
 enum class ESonoTraceUESimulationDrawColorModeEnum : uint8
 {
 	Static UMETA(DisplayName = "Static"),
@@ -501,9 +508,13 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE|Draw")
 	bool EnableDrawAllReceivers = false;
 
-	// Draw a green or red point on each receiver, depending on if there is LOS for the direct path component calculation
+	// Draw a point for each receiver
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE|Draw")
-	bool EnableDrawDirectPathLOS = false;
+	bool EnableDrawDirectPathPoints = false;
+	
+	// If drawing of direct path points is enabled, choose between displaying their strength or LOS mode (green=LOS, red=no LOS).
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE|Draw")
+	ESonoTraceUESimulationDrawDirectPointModeEnum DrawDirectPathPointsMode = ESonoTraceUESimulationDrawDirectPointModeEnum::LOS;
 
 	// Draws the points for all the components combined
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE|Draw")
@@ -557,13 +568,21 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE|Draw|Details")
 	float DrawPointsCurvatureMaximumValue = 1;
 
-	// The maximum value in centimeters to normalize the data when in strength mode for size or color when not auto-scaling
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE|Draw|Details", meta=(Units="Centimeters"))
+	// The maximum value  to normalize the data when in strength mode for size or color when not auto-scaling
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE|Draw|Details")
 	float DrawPointsStrengthMaximumValue = 5;
 	
 	// The emitter index to use for plotting the emitter directivity  when in directivity mode for size or color
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE|Draw|Details")
 	int DrawPointsDirectivityEmitterIndex = 0;
+	
+	// If drawing of direct path points is enabled, choose which emitter is chosen to show the strength off
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE|Draw|Details")
+	int DrawDirectPathPointStrengthEmitterIndex = 0;
+	
+	// If drawing of direct path points is enabled, choose which frequency is chosen to show the strength off
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE|Draw|Details")
+	int DrawDirectPathPointStrengthFrequencyIndex = 0;
 	
 	// DEBUG SETTINGS
 

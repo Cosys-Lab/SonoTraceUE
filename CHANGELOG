@@ -1,6 +1,10 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [In Development]
+
+- Added emitter and receiver simple directivity model support for passive/direct mode. 
+- Added visualisation for strength for direct mode next to the LOS visualisation.
 
 ## [Released]
 

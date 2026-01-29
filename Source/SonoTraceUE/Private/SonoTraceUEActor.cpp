@@ -1633,6 +1633,104 @@ void ASonoTraceUEActor::RunSimulation(const TArray<int32> OverrideEmitterSignalI
 	FTransform SensorTransform(SensorRotation, SensorLocation);    
 	FTransform WorldToSensorTransform = SensorTransform.Inverse();
 	
+	FSonoTraceUESubOutputStruct DirectPathSubOutput = FSonoTraceUESubOutputStruct();
+	if (InputSettings->EnableDirectPathComponentCalculation)
+	{
+		double CurrentTime = FPlatformTime::Seconds();
+		DirectPathSubOutput.MaximumCurvature = 0.0f;
+		DirectPathSubOutput.MaximumStrength = 0.0f;
+		DirectPathSubOutput.MaximumTotalDistance = 0.0f;
+		DirectPathSubOutput.Timestamp = RayTracingSubOutput.Timestamp;
+		CurrentOutput.DirectPathLOS.Init(false, ReceiverPoses.Num());
+
+		for (int32 EmitterIndex = 0; EmitterIndex < EmitterPoses.Num(); ++EmitterIndex)
+		{
+			TArray<TArray<TArray<float>>> Strengths; // Emitter // Receiver // Frequency
+			TArray<TArray<float>> TotalDistancesToReceivers; // Emitter // Receiver
+			float SummedStrength = 0.0f;
+
+			TotalDistancesToReceivers.Init(TArray<float>(), EmitterPoses.Num());
+			Strengths.SetNum(EmitterPoses.Num());
+			for (int32 EmitterIndex2 = 0; EmitterIndex2 < EmitterPoses.Num(); ++EmitterIndex2)
+			{
+				Strengths[EmitterIndex2].Init(TArray<float>(), ReceiverPoses.Num());
+				TotalDistancesToReceivers[EmitterIndex2].Init(0, ReceiverPoses.Num());
+				for (int32 ReceiverIndex = 0; ReceiverIndex < ReceiverPoses.Num(); ++ReceiverIndex)
+				{
+					Strengths[EmitterIndex2][ReceiverIndex].Init(0, InputSettings->NumberOfSimFrequencies);
+					TotalDistancesToReceivers[EmitterIndex2][ReceiverIndex] = FVector::Distance(EmitterPoses[EmitterIndex2].GetLocation(), ReceiverPoses[ReceiverIndex].GetLocation());
+				}				
+			}
+
+			for (int32 ReceiverIndex = 0; ReceiverIndex < ReceiverPoses.Num(); ++ReceiverIndex)
+			{
+
+				TTuple<bool, FVector> LOSFoundAndTransformResult = DirectPathReceiverOutput[ReceiverIndex];
+
+				if (LOSFoundAndTransformResult.Get<0>())
+				{
+					if (EmitterIndex == 0)
+						CurrentOutput.DirectPathLOS[ReceiverIndex] = true;
+					
+					float EmitterDirectivity = 1.0f;
+					if (InputSettings->EnableEmitterDirectivity)
+					{
+						const FVector EmitterToReceiver = (ReceiverPoses[ReceiverIndex].GetLocation() - EmitterPoses[EmitterIndex].GetLocation()).GetSafeNormal();
+						const float EmDot = FVector::DotProduct(EmitterToReceiver, EmitterPoses[EmitterIndex].GetUnitAxis(EAxis::X));
+						EmitterDirectivity = (1.0f - GeneratedSettings.FinalEmitterDirectivities[EmitterIndex]) + (GeneratedSettings.FinalEmitterDirectivities[EmitterIndex] * EmDot);
+						EmitterDirectivity = FMath::Max(0.0f, EmitterDirectivity);
+					}				
+					
+					float ReceiverDirectivity = 1.0f;
+					if (InputSettings->EnableReceiverDirectivity)
+					{
+						const FVector ReceiverToEmitter = (EmitterPoses[EmitterIndex].GetLocation() - ReceiverPoses[ReceiverIndex].GetLocation()).GetSafeNormal();
+						const float RecDot = FVector::DotProduct(ReceiverToEmitter, ReceiverPoses[ReceiverIndex].GetUnitAxis(EAxis::X));
+						ReceiverDirectivity = (1.0f - GeneratedSettings.FinalReceiverDirectivities[ReceiverIndex]) +
+							(GeneratedSettings.FinalReceiverDirectivities[ReceiverIndex] * RecDot);
+						ReceiverDirectivity = FMath::Max(0.0f, ReceiverDirectivity);
+					}
+
+					// Path loss (geometrical spreading loss) in meters
+					const float ReflectionStrengthPathLoss = 1.0f / FMath::Square(TotalDistancesToReceivers[EmitterIndex][ReceiverIndex] / 100.0f);
+
+					// Loop the simulation frequencies and calculate the specular reflection strength with the BRDF
+					Strengths[EmitterIndex][ReceiverIndex].Init(0, InputSettings->NumberOfSimFrequencies);
+					for (int32 FrequencyIndex = 0; FrequencyIndex < InputSettings->NumberOfSimFrequencies; FrequencyIndex++)
+					{					
+						const float AlphaAbsorption = 0.038 * (GeneratedSettings.Frequencies[FrequencyIndex] / 1000) - 0.3;
+						const float PathlossAbsorption = FMath::Pow(10.0f, -(AlphaAbsorption * TotalDistancesToReceivers[EmitterIndex][ReceiverIndex] / 100) / 20);
+						const float Strength = InputSettings->DirectPathStrength * ReflectionStrengthPathLoss * PathlossAbsorption * EmitterDirectivity * ReceiverDirectivity;
+						Strengths[EmitterIndex][ReceiverIndex][FrequencyIndex] = Strength;
+						SummedStrength += Strength * Strength;
+					}
+				}				
+			}
+			SummedStrength = SummedStrength / ReceiverPoses.Num() / EmitterPoses.Num() / InputSettings->NumberOfSimFrequencies;
+			if (SummedStrength > DirectPathSubOutput.MaximumStrength)
+				DirectPathSubOutput.MaximumStrength = SummedStrength;
+
+			const FName Label = FName(*(FString::Printf(TEXT("DIRECT_EMITTER_%d"), EmitterIndex)));
+			const float SensorDistance = FVector::Distance(EmitterPoses[EmitterIndex].GetLocation(), SensorLocation);
+			FSonoTraceUEPointStruct DirectPathPoint = FSonoTraceUEPointStruct(EmitterPoses[EmitterIndex].GetLocation(), SensorRotation.Vector(), Label, EmitterIndex,
+																			  SensorDistance, SensorDistance, SummedStrength, TotalDistancesToReceivers, Strengths);
+			if (InputSettings->PointsInSensorFrame)
+			{    
+				DirectPathPoint.Location = WorldToSensorTransform.TransformPosition(DirectPathPoint.Location);
+				DirectPathPoint.ReflectionDirection = WorldToSensorTransform.TransformVector(DirectPathPoint.ReflectionDirection);
+			}
+			DirectPathSubOutput.ReflectedPoints.Add(DirectPathPoint);
+			DirectPathSubOutput.ReflectedStrengths.Add(SummedStrength);
+		}
+		if (InputSettings->EnableSimulationSubOutput)
+		{
+			CurrentOutput.DirectPathSubOutput = DirectPathSubOutput;
+		}		
+		CurrentOutput.ReflectedPoints.Append(DirectPathSubOutput.ReflectedPoints);
+		CurrentOutput.Timestamp = DirectPathSubOutput.Timestamp;
+		if (InputSettings->EnableDebugLogExecutionTimes)
+			UE_LOG(SonoTraceUE, Log, TEXT("Direct path component calculation: %.5fs"), FPlatformTime::Seconds() - CurrentTime);
+	}
 	if (InputSettings->EnableSpecularComponentCalculation)
 	{
 		double CurrentTime = FPlatformTime::Seconds();
@@ -2046,87 +2144,7 @@ void ASonoTraceUEActor::RunSimulation(const TArray<int32> OverrideEmitterSignalI
 		CurrentOutput.ReflectedPoints.Append(DiffractionSubOutput.ReflectedPoints);
 		if (InputSettings->EnableDebugLogExecutionTimes)
 			UE_LOG(SonoTraceUE, Log, TEXT("Diffraction component calculation:%.5fs"), FPlatformTime::Seconds() - CurrentTime);
-	}
-
-	FSonoTraceUESubOutputStruct DirectPathSubOutput = FSonoTraceUESubOutputStruct();
-	if (InputSettings->EnableDirectPathComponentCalculation)
-	{
-		double CurrentTime = FPlatformTime::Seconds();
-		DirectPathSubOutput.MaximumCurvature = 0.0f;
-		DirectPathSubOutput.MaximumStrength = 0.0f;
-		DirectPathSubOutput.MaximumTotalDistance = 0.0f;
-		DirectPathSubOutput.Timestamp = RayTracingSubOutput.Timestamp;
-		CurrentOutput.DirectPathLOS.Init(false, ReceiverPoses.Num());
-
-		for (int32 EmitterIndex = 0; EmitterIndex < EmitterPoses.Num(); ++EmitterIndex)
-		{
-			TArray<TArray<TArray<float>>> Strengths; // Emitter // Receiver // Frequency
-			TArray<TArray<float>> TotalDistancesToReceivers; // Emitter // Receiver
-			float SummedStrength = 0.0f;
-
-			TotalDistancesToReceivers.Init(TArray<float>(), EmitterPoses.Num());
-			Strengths.SetNum(EmitterPoses.Num());
-			for (int32 EmitterIndex2 = 0; EmitterIndex2 < EmitterPoses.Num(); ++EmitterIndex2)
-			{
-				Strengths[EmitterIndex2].Init(TArray<float>(), ReceiverPoses.Num());
-				TotalDistancesToReceivers[EmitterIndex2].Init(0, ReceiverPoses.Num());
-				for (int32 ReceiverIndex = 0; ReceiverIndex < ReceiverPoses.Num(); ++ReceiverIndex)
-				{
-					Strengths[EmitterIndex2][ReceiverIndex].Init(0, InputSettings->NumberOfSimFrequencies);
-					TotalDistancesToReceivers[EmitterIndex2][ReceiverIndex] = FVector::Distance(EmitterPoses[EmitterIndex2].GetLocation(), ReceiverPoses[ReceiverIndex].GetLocation());
-				}				
-			}
-
-			for (int32 ReceiverIndex = 0; ReceiverIndex < ReceiverPoses.Num(); ++ReceiverIndex)
-			{
-
-				TTuple<bool, FVector> LOSFoundAndTransformResult = DirectPathReceiverOutput[ReceiverIndex];
-
-				if (LOSFoundAndTransformResult.Get<0>())
-				{
-					if (EmitterIndex == 0)
-						CurrentOutput.DirectPathLOS[ReceiverIndex] = true;
-
-					// Path loss (geometrical spreading loss) in meters
-					const float ReflectionStrengthPathLoss = 1.0f / FMath::Square(TotalDistancesToReceivers[EmitterIndex][ReceiverIndex] / 100.0f);
-
-					// Loop the simulation frequencies and calculate the specular reflection strength with the BRDF
-					Strengths[EmitterIndex][ReceiverIndex].Init(0, InputSettings->NumberOfSimFrequencies);
-					for (int32 FrequencyIndex = 0; FrequencyIndex < InputSettings->NumberOfSimFrequencies; FrequencyIndex++)
-					{					
-						const float AlphaAbsorption = 0.038 * (GeneratedSettings.Frequencies[FrequencyIndex] / 1000) - 0.3;
-						const float PathlossAbsorption = FMath::Pow(10.0f, -(AlphaAbsorption * TotalDistancesToReceivers[EmitterIndex][ReceiverIndex] / 100) / 20);
-						const float Strength = InputSettings->DirectPathStrength * ReflectionStrengthPathLoss * PathlossAbsorption;
-						Strengths[EmitterIndex][ReceiverIndex][FrequencyIndex] = Strength;
-						SummedStrength += Strength * Strength;
-					}
-				}				
-			}
-			SummedStrength = SummedStrength / ReceiverPoses.Num() / EmitterPoses.Num() / InputSettings->NumberOfSimFrequencies;
-			if (SummedStrength > DirectPathSubOutput.MaximumStrength)
-				DirectPathSubOutput.MaximumStrength = SummedStrength;
-
-			const FName Label = FName(*(FString::Printf(TEXT("DIRECT_EMITTER_%d"), EmitterIndex)));
-			const float SensorDistance = FVector::Distance(EmitterPoses[EmitterIndex].GetLocation(), SensorLocation);
-			FSonoTraceUEPointStruct DirectPathPoint = FSonoTraceUEPointStruct(EmitterPoses[EmitterIndex].GetLocation(), SensorRotation.Vector(), Label, EmitterIndex,
-																			  SensorDistance, SensorDistance, SummedStrength, TotalDistancesToReceivers, Strengths);
-			if (InputSettings->PointsInSensorFrame)
-			{    
-				DirectPathPoint.Location = WorldToSensorTransform.TransformPosition(DirectPathPoint.Location);
-				DirectPathPoint.ReflectionDirection = WorldToSensorTransform.TransformVector(DirectPathPoint.ReflectionDirection);
-			}
-			DirectPathSubOutput.ReflectedPoints.Add(DirectPathPoint);
-			DirectPathSubOutput.ReflectedStrengths.Add(SummedStrength);
-		}
-		if (InputSettings->EnableSimulationSubOutput)
-		{
-			CurrentOutput.DirectPathSubOutput = DirectPathSubOutput;
-		}		
-		CurrentOutput.ReflectedPoints.Append(DirectPathSubOutput.ReflectedPoints);
-		CurrentOutput.Timestamp = DirectPathSubOutput.Timestamp;
-		if (InputSettings->EnableDebugLogExecutionTimes)
-			UE_LOG(SonoTraceUE, Log, TEXT("Direct path component calculation: %.5fs"), FPlatformTime::Seconds() - CurrentTime);
-	}
+	}	
 
 	CurrentOutput.MaximumCurvature = FMath::Max(DirectPathSubOutput.MaximumCurvature,FMath::Max(RayTracingSubOutput.MaximumCurvature, DiffractionSubOutput.MaximumCurvature));
 	CurrentOutput.MaximumStrength = FMath::Max(DirectPathSubOutput.MaximumStrength,FMath::Max(RayTracingSubOutput.MaximumStrength, DiffractionSubOutput.MaximumStrength));
@@ -2736,34 +2754,57 @@ void ASonoTraceUEActor::DrawSimulationResult()
 			}
 		}
 
-		if (((EnableSimulationEnableOverride && EnableSimulation) || (!EnableSimulationEnableOverride && InputSettings->EnableSimulation)) && InputSettings->EnableDrawDirectPathLOS && InputSettings->EnableDirectPathComponentCalculation)
+		if (((EnableSimulationEnableOverride && EnableSimulation) || (!EnableSimulationEnableOverride && InputSettings->EnableSimulation)) && InputSettings->EnableDrawDirectPathPoints && InputSettings->EnableDirectPathComponentCalculation)
 		{
-			for (int32 ReceiverIndex = 0; ReceiverIndex < ReceiverPoses.Num(); ++ReceiverIndex)
-			{							
-				if (CurrentOutput.DirectPathLOS[ReceiverIndex])
+			if (InputSettings->DrawDirectPathPointsMode == ESonoTraceUESimulationDrawDirectPointModeEnum::LOS)
+			{
+				for (int32 ReceiverIndex = 0; ReceiverIndex < ReceiverPoses.Num(); ++ReceiverIndex)
+				{							
+					if (CurrentOutput.DirectPathLOS[ReceiverIndex])
+					{
+						DrawDebugPoint(
+							GetWorld(),
+							CurrentOutput.ReceiverPoses[ReceiverIndex].GetLocation(),
+							20.0f,                   
+							FColor::Green,       
+							false,                
+							-1,                    
+							0                   
+						);			
+					}else
+					{
+						DrawDebugPoint(
+						GetWorld(),
+						CurrentOutput.ReceiverPoses[ReceiverIndex].GetLocation(),
+						20.0f,                   
+						FColor::Red,       
+						false,                
+						-1,                    
+						0                   
+						);
+					}	
+				}	
+			}else if (InputSettings->DrawDirectPathPointsMode == ESonoTraceUESimulationDrawDirectPointModeEnum::Strength)
+			{
+				const TArray<FColor>& ColorMap = FColorMapSelector::GetColorMap(InputSettings->DrawPointsColorMap);
+
+				for (int32 ReceiverIndex = 0; ReceiverIndex < ReceiverPoses.Num(); ++ReceiverIndex)
 				{
+					float Strength = CurrentOutput.ReflectedPoints[InputSettings->DrawDirectPathPointStrengthEmitterIndex].Strengths[InputSettings->DrawDirectPathPointStrengthEmitterIndex][ReceiverIndex][InputSettings->DrawDirectPathPointStrengthFrequencyIndex];
+					
+					int32 NormalizedValueForColor = FMath::Clamp(FMath::RoundToInt(Strength /  InputSettings->DrawPointsStrengthMaximumValue * 255.0f), 0, 254);
+					FColor PointColor = ColorMap[NormalizedValueForColor];					
 					DrawDebugPoint(
 						GetWorld(),
 						CurrentOutput.ReceiverPoses[ReceiverIndex].GetLocation(),
 						20.0f,                   
-						FColor::Green,       
+						PointColor,       
 						false,                
 						-1,                    
 						0                   
-					);			
-				}else
-				{
-					DrawDebugPoint(
-					GetWorld(),
-					CurrentOutput.ReceiverPoses[ReceiverIndex].GetLocation(),
-					20.0f,                   
-					FColor::Red,       
-					false,                
-					-1,                    
-					0                   
-					);
-				}	
-			}	
+					);	
+				}
+			}			
 		}
 		
 		// Plot the results
@@ -2818,69 +2859,73 @@ void ASonoTraceUEActor::DrawSimulationResult()
 				{
 
 					if (PointIndex >= 0 && PointIndex < CurrentOutputSize)
-					{
+					{						
 						FSonoTraceUEPointStruct& Point = CurrentOutput.ReflectedPoints[PointIndex];
-						FColor PointColor = InputSettings->DrawDefaultPointsColor;
-						float PointSize;		
-						int32 NormalizedValueForColor;
-						float NormalizedValueForSize; 
-
 						
-						switch (InputSettings->DrawPointsColorMode)
+						if (!Point.IsDirectPath)
 						{
-						case ESonoTraceUESimulationDrawColorModeEnum::SensorDistance:
-							NormalizedValueForColor = FMath::Clamp(FMath::RoundToInt(Point.DistanceToSensor / InputSettings->MaximumRayDistance * 255.0f), 0, 254);
-							PointColor = ColorMap[NormalizedValueForColor];
-							break;
-						case ESonoTraceUESimulationDrawColorModeEnum::Curvature:
-							NormalizedValueForColor = FMath::Clamp(FMath::RoundToInt(Point.CurvatureMagnitude / DrawPointsCurvatureMaximumValue * 255.0f), 0, 254);
-							PointColor = ColorMap[NormalizedValueForColor];
-							break;
-						case ESonoTraceUESimulationDrawColorModeEnum::Strength:
-							NormalizedValueForColor = FMath::Clamp(FMath::RoundToInt(Point.SummedStrength / DrawPointsStrengthMaximumValue * 255.0f), 0, 254);
-							PointColor = ColorMap[NormalizedValueForColor];
-							break;
-						case ESonoTraceUESimulationDrawColorModeEnum::TotalDistance:{}
-							NormalizedValueForColor = FMath::Clamp( FMath::RoundToInt(Point.TotalDistance / DrawPointsTotalDistanceMaximumValue * 255.0f), 0, 254);
-							PointColor = ColorMap[NormalizedValueForColor];
-							break;
-						case ESonoTraceUESimulationDrawColorModeEnum::EmitterDirectivity:{}
-							NormalizedValueForColor = FMath::Clamp( FMath::RoundToInt(Point.EmitterDirectivities[InputSettings->DrawPointsDirectivityEmitterIndex] / 1 * 255.0f), 0, 254);
-							PointColor = ColorMap[NormalizedValueForColor];
-							break;
-						default:
-							NormalizedValueForColor = FMath::Clamp(FMath::RoundToInt(Point.SummedStrength / DrawPointsStrengthMaximumValue * 255.0f), 0, 254);
-							PointColor = ColorMap[NormalizedValueForColor];
-							break;
-						}
+								FColor PointColor = InputSettings->DrawDefaultPointsColor;
+							float PointSize;		
+							int32 NormalizedValueForColor;
+							float NormalizedValueForSize; 
 
-						// Determine size normalization
-						switch (InputSettings->DrawPointsSizeMode)
-						{
-						case ESonoTraceUESimulationDrawSizeModeEnum::Strength:
-							NormalizedValueForSize = FMath::Clamp(Point.SummedStrength /  InputSettings->DrawPointsStrengthMaximumValue, 0.0f, 1.0f);
-							PointSize = FMath::Lerp(1.0f, InputSettings->DrawDefaultPointsSize, NormalizedValueForSize);
-							break;
-						default:
-							PointSize = InputSettings->DrawDefaultPointsSize;
-							break;
-						}
+							
+							switch (InputSettings->DrawPointsColorMode)
+							{
+							case ESonoTraceUESimulationDrawColorModeEnum::SensorDistance:
+								NormalizedValueForColor = FMath::Clamp(FMath::RoundToInt(Point.DistanceToSensor / InputSettings->MaximumRayDistance * 255.0f), 0, 254);
+								PointColor = ColorMap[NormalizedValueForColor];
+								break;
+							case ESonoTraceUESimulationDrawColorModeEnum::Curvature:
+								NormalizedValueForColor = FMath::Clamp(FMath::RoundToInt(Point.CurvatureMagnitude / DrawPointsCurvatureMaximumValue * 255.0f), 0, 254);
+								PointColor = ColorMap[NormalizedValueForColor];
+								break;
+							case ESonoTraceUESimulationDrawColorModeEnum::Strength:
+								NormalizedValueForColor = FMath::Clamp(FMath::RoundToInt(Point.SummedStrength / DrawPointsStrengthMaximumValue * 255.0f), 0, 254);
+								PointColor = ColorMap[NormalizedValueForColor];
+								break;
+							case ESonoTraceUESimulationDrawColorModeEnum::TotalDistance:{}
+								NormalizedValueForColor = FMath::Clamp( FMath::RoundToInt(Point.TotalDistance / DrawPointsTotalDistanceMaximumValue * 255.0f), 0, 254);
+								PointColor = ColorMap[NormalizedValueForColor];
+								break;
+							case ESonoTraceUESimulationDrawColorModeEnum::EmitterDirectivity:{}
+								NormalizedValueForColor = FMath::Clamp( FMath::RoundToInt(Point.EmitterDirectivities[InputSettings->DrawPointsDirectivityEmitterIndex] / 1 * 255.0f), 0, 254);
+								PointColor = ColorMap[NormalizedValueForColor];
+								break;
+							default:
+								NormalizedValueForColor = FMath::Clamp(FMath::RoundToInt(Point.SummedStrength / DrawPointsStrengthMaximumValue * 255.0f), 0, 254);
+								PointColor = ColorMap[NormalizedValueForColor];
+								break;
+							}
 
-						
-						FVector DrawLocation = Point.Location;
-						if (InputSettings->PointsInSensorFrame)
-							DrawLocation = SensorToWorldTransform.TransformPosition(Point.Location);					
-										
-						// Draw a small point at the location
-						DrawDebugPoint(
-							GetWorld(),
-							DrawLocation,
-							PointSize,
-							PointColor,       
-							false,                
-							-1,                    
-							0                   
-						);	
+							// Determine size normalization
+							switch (InputSettings->DrawPointsSizeMode)
+							{
+							case ESonoTraceUESimulationDrawSizeModeEnum::Strength:
+								NormalizedValueForSize = FMath::Clamp(Point.SummedStrength /  InputSettings->DrawPointsStrengthMaximumValue, 0.0f, 1.0f);
+								PointSize = FMath::Lerp(1.0f, InputSettings->DrawDefaultPointsSize, NormalizedValueForSize);
+								break;
+							default:
+								PointSize = InputSettings->DrawDefaultPointsSize;
+								break;
+							}
+
+							
+							FVector DrawLocation = Point.Location;
+							if (InputSettings->PointsInSensorFrame)
+								DrawLocation = SensorToWorldTransform.TransformPosition(Point.Location);					
+											
+							// Draw a small point at the location
+							DrawDebugPoint(
+								GetWorld(),
+								DrawLocation,
+								PointSize,
+								PointColor,       
+								false,                
+								-1,                    
+								0                   
+							);	
+						}						
 					}									
 				}
 			}
