@@ -699,6 +699,10 @@ public:
 	// The frequency bin index to use for the data for when in reflection strength mode for mesh data
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE|Debug")
 	int32 DrawDebugMeshReflectionStrengthFrequencyIndex = 1;
+	
+	// Disable entire initalization of the simulation. This can be used for certain debug tests
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE|Debug")
+	bool DebugDisableInitialization = false;
 };
 
 USTRUCT(BlueprintType)
@@ -1233,13 +1237,11 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "SonoTraceUE")
 	bool SetNewSensorOwnerWorldTransform(const FVector& NewOwnerTranslation, const FRotator& NewOwnerRotator, const ETeleportType Teleport = ETeleportType::None);
 	
-	/**
-	* Run a performance test for mesh preprocessing (curvature and BRDF/Material calculations).
-	* Creates synthetic test data with configurable triangle and frequency counts to measure
-	* memory usage and computation time for computational performance analysis.
-	*/
-	UFUNCTION(BlueprintCallable, Category = "SonoTraceUE|Performance")
+	UFUNCTION(BlueprintCallable, Category = "SonoTraceUE|Debug")
 	FString DebugRunMeshPreprocessingTest(int32 NumberOfTriangles = 10000, int32 NumberOfFrequencies = 0, const FString& TestDescription = TEXT("Performance Test"), bool bSaveToFile = false, const FString& FilePath = TEXT(""), bool bAppendToFile = true);
+
+	UFUNCTION(BlueprintCallable, Category = "SonoTraceUE|Debug")
+	FString DebugRunSimulationParameterTest(const TArray<FVector>& EmitterPositions, const TArray<FVector>& ReceiverPositions, int32 NumberOfInitialRays = 50000, int32 maxBounces = 1, bool EnableDiffractionComponentCalculation = true, int32 DiffractionSimDivisionFactor = 25, int32 NumberOfSimFrequencies = 14, const FString& TestDescription = TEXT("Simulation Parameter Test"), bool bSaveToFile = false, const FString& FilePath = TEXT(""), bool bAppendToFile = true);
 
 	UFUNCTION()
 	void InterfaceOnConnect(const UObjectDelivererProtocol* ClientSocket);
@@ -1252,6 +1254,9 @@ public:
 
 	UFUNCTION()
 	void InterfaceOnReceiveString(const FString& ReceivedString, const UObjectDelivererProtocol* FromObject);
+	
+	UFUNCTION()
+	void EndSimulation();
 
 	// When this is true, the EnableSimulation variable overrides the Input Settings Data Table mode
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE|Input")
@@ -1324,7 +1329,9 @@ protected:
 	static TArray<uint8> SerializeObjectSettingsStruct(FSonoTraceUEObjectSettingsStruct* ObjectSettingsStruct);
 	static TArray<uint8> SerializePointStruct(FSonoTraceUEPointStruct* PointStruct);
 	static void DrawDebugNonSymmetricalFrustum(const UWorld* InWorld, const FTransform& StartTransform, const float LowerAzimuthLimit, const float UpperAzimuthLimit, const float LowerElevationLimit, const float UpperElevationLimit, const float Distance, FColor const& Color, bool bPersistentLines = false, float LifeTime=-1.f, uint8 DepthPriority = 0, float Thickness = 0.f);
-
+	static void RunSpecularComponentSimulation(FSonoTraceUESubOutputStruct* CurrentRayTracingSubOutput, const USonoTraceUEInputSettingsData* CurrentInputSettings, const FSonoTraceUEGeneratedInputStruct* CurrentGeneratedSettings,
+	                                           FTransform CurrentWorldToSensorTransform, const TArray<FTransform> CurrentEmitterPoses, TArray<FTransform> CurrentReceiverPoses);
+	
 	float TranscurredTime = 0;
 	bool Initialized = false;
 	bool AwaitingRayTracingResult = false;
