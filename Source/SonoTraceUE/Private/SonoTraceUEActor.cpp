@@ -3580,8 +3580,281 @@ TArray<float> ASonoTraceUEActor::NormLog(const TArray<float>& MatIn, float Thres
 	return MatOut;
 }
 
+FString ASonoTraceUEActor::DebugRunMeshPreprocessingTest(int32 NumberOfTriangles, int32 NumberOfFrequencies, const FString& TestDescription, bool bSaveToFile, const FString& FilePath, bool bAppendToFile)
+{
+	const FString TestTimestamp = FDateTime::Now().ToString(TEXT("%Y-%m-%d %H:%M:%S"));
+	float CurvatureCalculationTimeMs = 0.0f;
+	float BRDFMaterialCalculationTimeMs = 0.0f;
+	float TotalCalculationTimeMs = 0.0f;
+	float MemoryUsedMB = 0.0f;
 
+	int32 ResolvedFrequencyCount = NumberOfFrequencies;
 
+	UE_LOG(SonoTraceUE, Log, TEXT("===== Starting Mesh Preprocessing Performance Test ====="));
+	UE_LOG(SonoTraceUE, Log, TEXT("Description: %s"), *TestDescription);
+	UE_LOG(SonoTraceUE, Log, TEXT("Number of Triangles: %d"), NumberOfTriangles);
+	UE_LOG(SonoTraceUE, Log, TEXT("Number of Frequencies: %d"), ResolvedFrequencyCount);
+	UE_LOG(SonoTraceUE, Log, TEXT("Timestamp: %s"), *TestTimestamp);
+
+	FSonoTraceUEMeshDataStruct TestMeshData;
+	FSonoTraceUEObjectSettingsStruct TestObjectSettings;
+	TestObjectSettings.BrdfTransitionPosition = 0.4f;
+	TestObjectSettings.BrdfTransitionSlope = 2.0f;
+	TestObjectSettings.MaterialsTransitionPosition = 0.4f;
+	TestObjectSettings.MaterialsTransitionSlope = 2.0f;
+	const float BrdfSpecStart = InputSettings ? InputSettings->ObjectSettingsDefault.BrdfExponentSpecularStart : 8.0f;
+	const float BrdfDiffStart = InputSettings ? InputSettings->ObjectSettingsDefault.BrdfExponentDiffractionStart : 70.0f;
+	const float MatSpecStart = InputSettings ? InputSettings->ObjectSettingsDefault.MaterialStrengthSpecularStart : 10.0f;
+	const float MatDiffStart = InputSettings ? InputSettings->ObjectSettingsDefault.MaterialStrengthDiffractionStart : 0.025f;
+	TestObjectSettings.BrdfExponentsSpecular.Init(BrdfSpecStart, ResolvedFrequencyCount);
+	TestObjectSettings.BrdfExponentsDiffraction.Init(BrdfDiffStart, ResolvedFrequencyCount);
+	TestObjectSettings.MaterialStrengthsSpecular.Init(MatSpecStart, ResolvedFrequencyCount);
+	TestObjectSettings.MaterialStrengthsDiffraction.Init(MatDiffStart, ResolvedFrequencyCount);
+	TestObjectSettings.DefaultTriangleBRDF.Init(1.0f, ResolvedFrequencyCount);
+	TestObjectSettings.DefaultTriangleMaterial.Init(1.0f, ResolvedFrequencyCount);
+
+	UE_LOG(SonoTraceUE, Log, TEXT("Generating synthetic mesh data (simulating CalculateMeshCurvature operations)..."));
+	const float GridSize = FMath::Sqrt(static_cast<float>(NumberOfTriangles) / 2.0f); 
+	const int32 QuadsPerSide = FMath::CeilToInt(GridSize);
+	const float QuadSize = 100.0f;
+	
+	UE::Geometry::FDynamicMesh3 TestMesh;
+	TestMesh.EnableVertexNormals(FVector3f::UpVector);
+	
+	for (int32 Y = 0; Y <= QuadsPerSide; ++Y)
+	{
+		for (int32 X = 0; X <= QuadsPerSide; ++X)
+		{
+			const float PosX = X * QuadSize;
+			const float PosY = Y * QuadSize;
+			const float PosZ = FMath::Sin(X * 0.3f) * FMath::Cos(Y * 0.3f) * 20.0f;
+			
+			FVector3f Normal(FMath::Cos(X * 0.3f) * FMath::Cos(Y * 0.3f), 
+			                 FMath::Sin(X * 0.3f) * FMath::Sin(Y * 0.3f), 
+			                 1.0f);
+			Normal.Normalize();
+			
+			int32 VertexID = TestMesh.AppendVertex(FVector3d(PosX, PosY, PosZ));
+			TestMesh.SetVertexNormal(VertexID, Normal);
+		}
+	}
+	
+	int32 TriangleCount = 0;
+	for (int32 Y = 0; Y < QuadsPerSide && TriangleCount < NumberOfTriangles; ++Y)
+	{
+		for (int32 X = 0; X < QuadsPerSide && TriangleCount < NumberOfTriangles; ++X)
+		{
+			const int32 V00 = Y * (QuadsPerSide + 1) + X;
+			const int32 V10 = Y * (QuadsPerSide + 1) + X + 1;
+			const int32 V01 = (Y + 1) * (QuadsPerSide + 1) + X;
+			const int32 V11 = (Y + 1) * (QuadsPerSide + 1) + X + 1;
+			
+			if (TriangleCount < NumberOfTriangles)
+			{
+				TestMesh.AppendTriangle(V00, V10, V01);
+				TriangleCount++;
+			}
+			if (TriangleCount < NumberOfTriangles)
+			{
+				TestMesh.AppendTriangle(V10, V11, V01);
+				TriangleCount++;
+			}
+		}
+	}
+	UE_LOG(SonoTraceUE, Log, TEXT("Built FDynamicMesh3 with %d vertices and %d triangles"), TestMesh.VertexCount(), TestMesh.TriangleCount());
+	
+	const int64 N = static_cast<int64>(NumberOfTriangles);
+	const int64 F = static_cast<int64>(ResolvedFrequencyCount);
+	const int64 SizeOfFloat = sizeof(float);                 
+	const int64 SizeOfInt32 = sizeof(int32);                    
+	const int64 SizeOfFVector = sizeof(FVector);        
+	const int64 TArrayOverhead = sizeof(TArray<float>);    	
+
+	const int64 MemTriangleCurvatureMagnitude = N * SizeOfFloat + TArrayOverhead;
+	const int64 MemTriangleSize = N * SizeOfFloat + TArrayOverhead;
+	const int64 MemTriangleBRDF = N * F * SizeOfFloat + N * TArrayOverhead + TArrayOverhead; 
+	const int64 MemTriangleMaterial = N * F * SizeOfFloat + N * TArrayOverhead + TArrayOverhead;
+	const int64 MemTriangleNormal = N * SizeOfFVector + TArrayOverhead;
+	const int64 MemTrianglePosition = N * SizeOfFVector + TArrayOverhead;
+	const int64 MemImportanceVertexOrderedBRDFValue = N * SizeOfFloat + TArrayOverhead;
+	const int64 MemImportanceVertexOrderedIndex = N * SizeOfInt32 + TArrayOverhead;	
+	const int64 TotalCalculatedMemoryBytes = MemTriangleCurvatureMagnitude + MemTriangleSize +
+		MemTriangleBRDF + MemTriangleMaterial + MemTriangleNormal + MemTrianglePosition +
+		MemImportanceVertexOrderedBRDFValue + MemImportanceVertexOrderedIndex;	
+	MemoryUsedMB = static_cast<float>(TotalCalculatedMemoryBytes) / (1024.0f * 1024.0f);
+	
+	UE_LOG(SonoTraceUE, Log, TEXT("Calculated memory consumption for FSonoTraceUEMeshDataStruct:"));
+	UE_LOG(SonoTraceUE, Log, TEXT("%lld bytes (%.3f MB)"), TotalCalculatedMemoryBytes, MemoryUsedMB);
+	
+	const float CurvatureScaleFactor = InputSettings ? InputSettings->CurvatureScale : 1.0f;
+	const bool EnableCurvatureScaler = InputSettings ? InputSettings->EnableCurvatureTriangleSizeBasedScaler : true;
+	const float CurvatureScalerMin = InputSettings ? InputSettings->CurvatureScalerMinimumEffect : 0.02f;
+	const float CurvatureScalerMax = InputSettings ? InputSettings->CurvatureScalerMaximumEffect : 2.0f;
+	const float CurvatureScalerLowerThreshold = InputSettings ? InputSettings->CurvatureScalerLowerTriangleSizeThreshold : 0.5f;
+	const float CurvatureScalerUpperThreshold = InputSettings ? InputSettings->CurvatureScalerUpperTriangleSizeThreshold : 5.0f;
+	const float DiffractionThreshold = InputSettings ? InputSettings->DiffractionTriangleSizeThreshold : 200.0f;
+
+	UE_LOG(SonoTraceUE, Log, TEXT("Starting curvature calculation test (using real UE::MeshCurvature::MeanCurvatureNormal)..."));
+	const double CurvatureStartTime = FPlatformTime::Seconds();
+	
+	for (int32 TriangleID : TestMesh.TriangleIndicesItr())
+	{
+		UE::Geometry::FIndex3i TriVertices = TestMesh.GetTriangle(TriangleID);
+		
+		FVector3d Vertex1Position = TestMesh.GetVertex(TriVertices.A);
+		FVector3d Vertex2Position = TestMesh.GetVertex(TriVertices.B);
+		FVector3d Vertex3Position = TestMesh.GetVertex(TriVertices.C);
+		
+		FVector3d TrianglePosition = (Vertex1Position + Vertex2Position + Vertex3Position) / 3.0;
+		TestMeshData.TrianglePosition.Add(FVector(TrianglePosition));
+		
+		FVector3f Vertex1Normal = TestMesh.GetVertexNormal(TriVertices.A);
+		
+		FVector Edge1 = FVector(Vertex2Position) - FVector(Vertex1Position);
+		FVector Edge2 = FVector(Vertex3Position) - FVector(Vertex1Position);
+		FVector TriangleNormal = FVector::CrossProduct(Edge1, Edge2);
+		
+		float DotNormal = FVector::DotProduct(TriangleNormal, FVector(Vertex1Normal));
+		if (DotNormal < 0.0f)
+			TriangleNormal = -TriangleNormal;
+		TestMeshData.TriangleNormal.Add(TriangleNormal);
+		
+		float TriangleSize = FVector3d::CrossProduct(Vertex2Position - Vertex1Position, Vertex3Position - Vertex1Position).Length() * 0.5;
+		TestMeshData.TriangleSize.Add(TriangleSize);
+		
+		FVector3d Vertex1CurvatureNormal = UE::MeshCurvature::MeanCurvatureNormal(TestMesh, TriVertices.A);
+		FVector3d Vertex2CurvatureNormal = UE::MeshCurvature::MeanCurvatureNormal(TestMesh, TriVertices.B);
+		FVector3d Vertex3CurvatureNormal = UE::MeshCurvature::MeanCurvatureNormal(TestMesh, TriVertices.C);
+		
+		double CurvatureMag1 = Vertex1CurvatureNormal.Length() / 2;
+		double CurvatureMag2 = Vertex2CurvatureNormal.Length() / 2;
+		double CurvatureMag3 = Vertex3CurvatureNormal.Length() / 2;
+		
+		double MaxCurvature = FMath::Max3(CurvatureMag1, CurvatureMag2, CurvatureMag3);
+		double MinCurvature = FMath::Min3(CurvatureMag1, CurvatureMag2, CurvatureMag3);
+		double CurvatureRange = MaxCurvature - MinCurvature;
+		
+		double MeanCurvatureNormalValue = CurvatureRange;
+		
+		if (EnableCurvatureScaler)
+		{
+			float ScaledAreaEffect = 0;
+			if (TriangleSize <= CurvatureScalerLowerThreshold)
+			{
+				ScaledAreaEffect = CurvatureScalerMin + (1 - CurvatureScalerMin) / CurvatureScalerLowerThreshold * TriangleSize;
+			}
+			else if (TriangleSize > CurvatureScalerLowerThreshold && TriangleSize <= CurvatureScalerUpperThreshold)
+			{
+				ScaledAreaEffect = 1 + (CurvatureScalerMax - 1) / (CurvatureScalerUpperThreshold - CurvatureScalerLowerThreshold) * (TriangleSize - CurvatureScalerLowerThreshold);
+			}
+			else if (TriangleSize > CurvatureScalerUpperThreshold && TriangleSize <= DiffractionThreshold)
+			{
+				ScaledAreaEffect = CurvatureScalerMax - CurvatureScalerMax / (DiffractionThreshold - CurvatureScalerUpperThreshold) * (TriangleSize - CurvatureScalerUpperThreshold);
+			}
+			MeanCurvatureNormalValue = MeanCurvatureNormalValue * ScaledAreaEffect;
+		}
+		
+		TestMeshData.TriangleCurvatureMagnitude.Add(MeanCurvatureNormalValue * CurvatureScaleFactor);
+	}	
+	
+	const double CurvatureEndTime = FPlatformTime::Seconds();
+	CurvatureCalculationTimeMs = static_cast<float>((CurvatureEndTime - CurvatureStartTime) * 1000.0);	
+	UE_LOG(SonoTraceUE, Log, TEXT("Curvature calculation completed in %.3f ms"), CurvatureCalculationTimeMs);
+
+	UE_LOG(SonoTraceUE, Log, TEXT("Starting BRDF and Material calculation test..."));
+	const double BRDFStartTime = FPlatformTime::Seconds();
+	
+	GenerateBRDFAndMaterial(&TestObjectSettings, &TestMeshData);	
+	const double BRDFEndTime = FPlatformTime::Seconds();
+	BRDFMaterialCalculationTimeMs = static_cast<float>((BRDFEndTime - BRDFStartTime) * 1000.0);	
+	UE_LOG(SonoTraceUE, Log, TEXT("BRDF and Material calculation completed in %.3f ms"), BRDFMaterialCalculationTimeMs);
+
+	TotalCalculationTimeMs = CurvatureCalculationTimeMs + BRDFMaterialCalculationTimeMs;
+	FString CSVHeader = TEXT("Timestamp,Description,TriangleCount,FrequencyCount,CurvatureTimeMs,BRDFMaterialTimeMs,TotalTimeMs,MemoryUsedMB\n");
+	FString CSVRow = FString::Printf(TEXT("%s,\"%s\",%d,%d,%.15f,%.15f,%.15f,%.15f\n"),
+		*TestTimestamp,
+		*TestDescription,
+		NumberOfTriangles,
+		ResolvedFrequencyCount,
+		CurvatureCalculationTimeMs,
+		BRDFMaterialCalculationTimeMs,
+		TotalCalculationTimeMs,
+		MemoryUsedMB);
+	FString CSVFormattedData = CSVHeader + CSVRow;
+
+	UE_LOG(SonoTraceUE, Log, TEXT("===== Performance Test Results ====="));
+	UE_LOG(SonoTraceUE, Log, TEXT("Triangles: %d | Frequencies: %d"), NumberOfTriangles, ResolvedFrequencyCount);
+	UE_LOG(SonoTraceUE, Log, TEXT("Total calculation time: %.3f ms"), TotalCalculationTimeMs);
+	UE_LOG(SonoTraceUE, Log, TEXT("  - Curvature calculation: %.3f ms (%.1f%%)"), 
+		CurvatureCalculationTimeMs, 
+		(CurvatureCalculationTimeMs / TotalCalculationTimeMs) * 100.0f);
+	UE_LOG(SonoTraceUE, Log, TEXT("  - BRDF/Material calculation: %.3f ms (%.1f%%)"), 
+		BRDFMaterialCalculationTimeMs, 
+		(BRDFMaterialCalculationTimeMs / TotalCalculationTimeMs) * 100.0f);
+	UE_LOG(SonoTraceUE, Log, TEXT("Calculated memory for FSonoTraceUEMeshDataStruct: %.3f MB"), MemoryUsedMB);
+	UE_LOG(SonoTraceUE, Log, TEXT("Time per triangle: %.6f ms"), TotalCalculationTimeMs / NumberOfTriangles);
+	UE_LOG(SonoTraceUE, Log, TEXT("Triangles per second: %.0f"), (NumberOfTriangles / TotalCalculationTimeMs) * 1000.0f);
+
+	if (bSaveToFile)
+	{
+		FString TargetFilePath = FilePath;
+		if (TargetFilePath.IsEmpty())TargetFilePath = FPaths::ProjectSavedDir() + TEXT("SonoTraceUE/PerformanceTest.csv");
+
+		FString DirectoryPath = FPaths::GetPath(TargetFilePath);
+		if (!FPlatformFileManager::Get().GetPlatformFile().DirectoryExists(*DirectoryPath))FPlatformFileManager::Get().GetPlatformFile().CreateDirectoryTree(*DirectoryPath);
+
+		bool bFileExists = FPlatformFileManager::Get().GetPlatformFile().FileExists(*TargetFilePath);
+		
+		FString ContentToWrite;
+		if (!bFileExists || !bAppendToFile)
+		{
+			ContentToWrite = CSVFormattedData;
+			UE_LOG(SonoTraceUE, Log, TEXT("Creating new performance test CSV file: %s"), *TargetFilePath);
+		}
+		else if (bAppendToFile && bFileExists)
+		{
+			ContentToWrite = CSVRow;
+			UE_LOG(SonoTraceUE, Log, TEXT("Appending to existing performance test CSV file: %s"), *TargetFilePath);
+		}
+
+		if (FFileHelper::SaveStringToFile(ContentToWrite, *TargetFilePath, FFileHelper::EEncodingOptions::AutoDetect, &IFileManager::Get(), bAppendToFile ? EFileWrite::FILEWRITE_Append : EFileWrite::FILEWRITE_NoFail))
+		{
+			UE_LOG(SonoTraceUE, Log, TEXT("Successfully saved performance test results to: %s"), *TargetFilePath);
+		}
+		else
+		{
+			UE_LOG(SonoTraceUE, Warning, TEXT("Failed to save performance test results to: %s"), *TargetFilePath);
+		}
+	}
+	
+	TestMesh.Clear();
+	TestMeshData.TriangleCurvatureMagnitude.Empty();
+	TestMeshData.TriangleSize.Empty();
+	TestMeshData.TriangleNormal.Empty();
+	TestMeshData.TrianglePosition.Empty();
+	TestMeshData.ImportanceVertexOrderedBRDFValue.Empty();
+	TestMeshData.ImportanceVertexOrderedIndex.Empty();
+	for (TArray<float>& InnerArray : TestMeshData.TriangleBRDF)
+	{
+		InnerArray.Empty();
+	}
+	TestMeshData.TriangleBRDF.Empty();
+	for (TArray<float>& InnerArray : TestMeshData.TriangleMaterial)
+	{
+		InnerArray.Empty();
+	}
+	TestMeshData.TriangleMaterial.Empty();
+	TestObjectSettings.BrdfExponentsSpecular.Empty();
+	TestObjectSettings.BrdfExponentsDiffraction.Empty();
+	TestObjectSettings.MaterialStrengthsSpecular.Empty();
+	TestObjectSettings.MaterialStrengthsDiffraction.Empty();
+	TestObjectSettings.DefaultTriangleBRDF.Empty();
+	TestObjectSettings.DefaultTriangleMaterial.Empty();
+
+	UE_LOG(SonoTraceUE, Log, TEXT("===== Test Complete ====="));
+
+	return CSVFormattedData;
+}
 
 float ASonoTraceUEActor::SigmoidMix(const float X, const float Slope, const float Center, const float Value1, const float Value2)
 {

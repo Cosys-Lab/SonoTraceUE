@@ -1108,7 +1108,7 @@ public:
 	*/
 	UFUNCTION(BlueprintCallable, Category = "SonoTraceUE")
 	int32 GetEmitterSignalCount() const;
-
+	
 	/**
 	* Add an Actor to the SonoTraceUE mesh analysis system. Individual child components will be automatically parsed.
 	* If this contains any new mesh resource that is the first instance in the scene, it will load and parse this mesh data.
@@ -1232,6 +1232,14 @@ public:
 	*/
 	UFUNCTION(BlueprintCallable, Category = "SonoTraceUE")
 	bool SetNewSensorOwnerWorldTransform(const FVector& NewOwnerTranslation, const FRotator& NewOwnerRotator, const ETeleportType Teleport = ETeleportType::None);
+	
+	/**
+	* Run a performance test for mesh preprocessing (curvature and BRDF/Material calculations).
+	* Creates synthetic test data with configurable triangle and frequency counts to measure
+	* memory usage and computation time for computational performance analysis.
+	*/
+	UFUNCTION(BlueprintCallable, Category = "SonoTraceUE|Performance")
+	FString DebugRunMeshPreprocessingTest(int32 NumberOfTriangles = 10000, int32 NumberOfFrequencies = 0, const FString& TestDescription = TEXT("Performance Test"), bool bSaveToFile = false, const FString& FilePath = TEXT(""), bool bAppendToFile = true);
 
 	UFUNCTION()
 	void InterfaceOnConnect(const UObjectDelivererProtocol* ClientSocket);
