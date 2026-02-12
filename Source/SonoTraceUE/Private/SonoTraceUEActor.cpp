@@ -10,6 +10,8 @@
 #include "SonoTrace.h"
 #include "Math/UnrealMathUtility.h"
 #include <string>
+
+#include "GuidStructCustomization.h"
 #include "ObjectDeliverer/Public/Protocol/ProtocolTcpIpClient.h"
 #include "ObjectDeliverer/Public/Protocol/ProtocolTcpIpServer.h"
 #include "ObjectDeliverer/Public/PacketRule/PacketRuleSizeBody.h"
@@ -60,7 +62,7 @@ void ASonoTraceUEActor::BeginPlay()
 	
 	if (!InputSettings->DebugDisableInitialization)
 	{
-		if (InputSettings->EnableSpecularComponentCalculation || InputSettings->EnableDirectPathComponentCalculation)
+		if (InputSettings->EnableSpecularComponentCalculation || InputSettings->EnableDirectPathComponentCalculation || InputSettings->EnableDiffractionComponentCalculation)
 		{
 			InputSettings->EnableRaytracing = true;
 		}
@@ -1125,110 +1127,117 @@ void ASonoTraceUEActor::Tick(float DeltaTime)
 	
 	Super::Tick(DeltaTime);
 
-	UpdateTransformations();
-
-	if (InterfaceConnected)
+	if (InputSettings->DebugDisableInitialization)
 	{
-		UpdateInterface();
-	}	
-
-	if ((EnableSimulationEnableOverride && EnableSimulation) || (!EnableSimulationEnableOverride && InputSettings->EnableSimulation))
+		DebugRaytracingShaderTestTick(DeltaTime);
+	}else
 	{
-		if (Initialized && !StaticMeshComponentsToLoad.IsEmpty())
+		UpdateTransformations();
+		
+		if (InterfaceConnected)
 		{
-			for (int i = StaticMeshComponentsToLoad.Num() - 1; i >= 0; i--)
-			{
-				TTuple<FString, UStaticMeshComponent*, int32> ObjectNameAndStaticMeshComponentAndAttempts = StaticMeshComponentsToLoad[i];
-				FString ObjectName = ObjectNameAndStaticMeshComponentAndAttempts.Get<0>();
-				UStaticMeshComponent* StaticMeshComponent = ObjectNameAndStaticMeshComponentAndAttempts.Get<1>();
-				int32 Attempts = ObjectNameAndStaticMeshComponentAndAttempts.Get<2>();				
-				StaticMeshComponentsToLoad.RemoveAt(i);
-				AddStaticMeshComponent(StaticMeshComponent, ObjectName, false, false, Attempts == InputSettings->MeshDataGenerationAttempts, Attempts);					
-			}
-		}
-		if (Initialized && !SkeletalMeshComponentsToLoad.IsEmpty())
-		{
-			for (int i = SkeletalMeshComponentsToLoad.Num() - 1; i >= 0; i--)
-			{
-				TTuple<FString, USkeletalMeshComponent*, int32> ObjectNameAndSkeletalMeshComponentAndAttempts = SkeletalMeshComponentsToLoad[i];
-				FString ObjectName = ObjectNameAndSkeletalMeshComponentAndAttempts.Get<0>();
-				USkeletalMeshComponent* SkeletalMeshComponent = ObjectNameAndSkeletalMeshComponentAndAttempts.Get<1>();
-				int32 Attempts = ObjectNameAndSkeletalMeshComponentAndAttempts.Get<2>();
-				SkeletalMeshComponentsToLoad.RemoveAt(i);
-				AddSkeletalMeshComponent(SkeletalMeshComponent, ObjectName, false, false, Attempts == InputSettings->MeshDataGenerationAttempts, Attempts);
+			UpdateInterface();
+		}	
 
-			}
-		}
-		if (InputSettings->EnableRaytracing)
+		if ((EnableSimulationEnableOverride && EnableSimulation) || (!EnableSimulationEnableOverride && InputSettings->EnableSimulation))
 		{
-			if (GPUReadback != nullptr && TranscurredTime > 3.0f)
+			if (Initialized && !StaticMeshComponentsToLoad.IsEmpty())
 			{
-				UpdateShaderParameters();		
-
-				if (!Initialized)
+				for (int i = StaticMeshComponentsToLoad.Num() - 1; i >= 0; i--)
 				{
-					UE_LOG(SonoTraceUE, Log, TEXT("Starting initialization..."));
-					double CurrentTime = FPlatformTime::Seconds();
-					GenerateAllInitialMeshData();
-					if (InputSettings->EnableDebugLogExecutionTimes)
-						UE_LOG(SonoTraceUE, Log, TEXT("Initial mesh data generation: %.5fs"), FPlatformTime::Seconds() - CurrentTime);
-					ENQUEUE_RENDER_COMMAND(FSonoTrace) (
-						[this](FRHICommandListImmediate&)
-						{
-							SonoTrace.BeginRendering();
-							return true;
-						});
-					Initialized = true;
-
-					UE_LOG(SonoTraceUE, Log, TEXT("Completed initialization."));
-					
-					if (!InputSettings->EnableRunSimulationOnlyOnTrigger)
-						AwaitingRayTracingResult = true;
+					TTuple<FString, UStaticMeshComponent*, int32> ObjectNameAndStaticMeshComponentAndAttempts = StaticMeshComponentsToLoad[i];
+					FString ObjectName = ObjectNameAndStaticMeshComponentAndAttempts.Get<0>();
+					UStaticMeshComponent* StaticMeshComponent = ObjectNameAndStaticMeshComponentAndAttempts.Get<1>();
+					int32 Attempts = ObjectNameAndStaticMeshComponentAndAttempts.Get<2>();				
+					StaticMeshComponentsToLoad.RemoveAt(i);
+					AddStaticMeshComponent(StaticMeshComponent, ObjectName, false, false, Attempts == InputSettings->MeshDataGenerationAttempts, Attempts);					
 				}
 			}
-			
-			if (AwaitingRayTracingResult)
+			if (Initialized && !SkeletalMeshComponentsToLoad.IsEmpty())
 			{
-				ParseRayTracing();
-			}
-			
-			if (ReadyToUseRayTracingResult)
-			{
-				double CurrentTime = FPlatformTime::Seconds();
-				RunSimulation(TriggerTemporaryEmitterSignalIndexes);
-				if (InputSettings->EnableDebugLogExecutionTimes)
-					UE_LOG(SonoTraceUE, Log, TEXT("Complete simulation generation: %.5fs"), FPlatformTime::Seconds() - CurrentTime);
-				ReadyToUseRayTracingResult = false;
-				TriggerTemporaryEmitterSignalIndexes.Empty();
-				if (!InputSettings->EnableRunSimulationOnlyOnTrigger)
-					AwaitingRayTracingResult = true;
-			}			
-		}else
-		{
-			if (TranscurredTime > 3.0f){
-				if (!Initialized)
+				for (int i = SkeletalMeshComponentsToLoad.Num() - 1; i >= 0; i--)
 				{
-					UE_LOG(SonoTraceUE, Log, TEXT("Starting initialization..."));
-					GenerateAllInitialMeshData();
-					UE_LOG(SonoTraceUE, Log, TEXT("Completed initialization."));
-					Initialized = true;
+					TTuple<FString, USkeletalMeshComponent*, int32> ObjectNameAndSkeletalMeshComponentAndAttempts = SkeletalMeshComponentsToLoad[i];
+					FString ObjectName = ObjectNameAndSkeletalMeshComponentAndAttempts.Get<0>();
+					USkeletalMeshComponent* SkeletalMeshComponent = ObjectNameAndSkeletalMeshComponentAndAttempts.Get<1>();
+					int32 Attempts = ObjectNameAndSkeletalMeshComponentAndAttempts.Get<2>();
+					SkeletalMeshComponentsToLoad.RemoveAt(i);
+					AddSkeletalMeshComponent(SkeletalMeshComponent, ObjectName, false, false, Attempts == InputSettings->MeshDataGenerationAttempts, Attempts);
+
 				}
-				if (!InputSettings->EnableRunSimulationOnlyOnTrigger)
+			}
+			if (InputSettings->EnableRaytracing)
+			{
+				if (GPUReadback != nullptr && TranscurredTime > 3.0f)
+				{
+					UpdateShaderParameters();		
+
+					if (!Initialized)
+					{
+						UE_LOG(SonoTraceUE, Log, TEXT("Starting initialization..."));
+						double CurrentTime = FPlatformTime::Seconds();
+						GenerateAllInitialMeshData();
+						if (InputSettings->EnableDebugLogExecutionTimes)
+							UE_LOG(SonoTraceUE, Log, TEXT("Initial mesh data generation: %.5fs"), FPlatformTime::Seconds() - CurrentTime);
+						ENQUEUE_RENDER_COMMAND(FSonoTrace) (
+							[this](FRHICommandListImmediate&)
+							{
+								SonoTrace.BeginRendering();
+								return true;
+							});
+						Initialized = true;
+
+						UE_LOG(SonoTraceUE, Log, TEXT("Completed initialization."));
+						
+						if (!InputSettings->EnableRunSimulationOnlyOnTrigger)
+							AwaitingRayTracingResult = true;
+					}
+				}
+				
+				if (AwaitingRayTracingResult)
+				{
+					ParseRayTracing();
+				}
+				
+				if (ReadyToUseRayTracingResult)
 				{
 					double CurrentTime = FPlatformTime::Seconds();
-					RunSimulation(TArray<int32>());
+					RunSimulation(TriggerTemporaryEmitterSignalIndexes);
 					if (InputSettings->EnableDebugLogExecutionTimes)
 						UE_LOG(SonoTraceUE, Log, TEXT("Complete simulation generation: %.5fs"), FPlatformTime::Seconds() - CurrentTime);
+					ReadyToUseRayTracingResult = false;
+					TriggerTemporaryEmitterSignalIndexes.Empty();
+					if (!InputSettings->EnableRunSimulationOnlyOnTrigger)
+						AwaitingRayTracingResult = true;
+				}			
+			}else
+			{
+				if (TranscurredTime > 3.0f){
+					if (!Initialized)
+					{
+						UE_LOG(SonoTraceUE, Log, TEXT("Starting initialization..."));
+						GenerateAllInitialMeshData();
+						UE_LOG(SonoTraceUE, Log, TEXT("Completed initialization."));
+						Initialized = true;
+					}
+					if (!InputSettings->EnableRunSimulationOnlyOnTrigger)
+					{
+						double CurrentTime = FPlatformTime::Seconds();
+						RunSimulation(TArray<int32>());
+						if (InputSettings->EnableDebugLogExecutionTimes)
+							UE_LOG(SonoTraceUE, Log, TEXT("Complete simulation generation: %.5fs"), FPlatformTime::Seconds() - CurrentTime);
+					}
 				}
 			}
+
+			if (TranscurredTime > 3.0f)
+			{
+				if (InputSettings->EnableDrawDebug)
+					DrawSimulationDebug();
+				if (InputSettings->EnableDraw)
+					DrawSimulationResult();
+			}
 		}
-	}
-	if (TranscurredTime > 3.0f)
-	{
-		if (InputSettings->EnableDrawDebug)
-			DrawSimulationDebug();
-		if (InputSettings->EnableDraw)
-			DrawSimulationResult();
 	}
 }
 
@@ -1785,51 +1794,8 @@ void ASonoTraceUEActor::RunSimulation(const TArray<int32> OverrideEmitterSignalI
 					HitObjectTransforms.Add(PersistentPrimitiveIndexToPrimitiveComponent.FindChecked(PersistentPrimitiveIndex)->GetComponentTransform());
 				}
 			}						
-		}else
-		{
-			// Find all actors in range
-			TArray<UPrimitiveComponent*> OutComponents;
-			TArray<TEnumAsByte<EObjectTypeQuery>> ObjectTypes;
-			if (InputSettings->EnableDiffractionForDynamicObjects)
-			{
-				ObjectTypes = {};
-			}else
-			{
-				ObjectTypes = {UEngineTypes::ConvertToObjectType(ECC_WorldStatic)};
-			}
-			UKismetSystemLibrary::SphereOverlapComponents(
-				GetWorld(),
-				SensorLocation, 
-				InputSettings->MaximumRayDistance,
-				ObjectTypes,
-				nullptr, 
-				{},           
-				OutComponents
-			);
-
-			for (UPrimitiveComponent* Component : OutComponents)
-			{				
-				if (Cast<USkeletalMeshComponent>(Component) || Cast<UStaticMeshComponent>(Component))
-				{
-					UMeshComponent* MeshComponent = Cast<UMeshComponent>(Component);
-					if (MeshComponent->SceneProxy)
-					{
-						const int32 PersistentPrimitiveIndex = MeshComponent->SceneProxy->GetPrimitiveSceneInfo()->GetPersistentIndex().Index;
-						if (PersistentPrimitiveIndexToMeshDataIndex.Contains(PersistentPrimitiveIndex))
-						{
-							TTuple<FName, int32> ObjectNameAndTypeIndex = PersistentPrimitiveIndexToLabelsAndObjectTypes.FindChecked(PersistentPrimitiveIndex);
-							FName ObjectName = ObjectNameAndTypeIndex.Get<0>();
-							int32 ObjectTypeIndex = ObjectNameAndTypeIndex.Get<1>();
-							UE_LOG(SonoTraceUE, Log, TEXT("Object with label '%s' and object type #%d detected for diffraction."), *ObjectName.ToString(), ObjectTypeIndex);
-							HitObjectsPersistentPrimitiveIndexes.Add(PersistentPrimitiveIndex);
-							HitObjectTypes.Add(ObjectTypeIndex);
-							HitObjectLabels.Add(ObjectName);
-							HitObjectTransforms.Add(MeshComponent->GetComponentTransform());
-						}
-					}
-				}
-			}
-		}		
+		}
+		
 		int32 NumDiffractionPoints = FMath::CeilToInt32(static_cast<float>(InputSettings->NumberOfInitialRays) / static_cast<float>(InputSettings->DiffractionSimDivisionFactor));
 		DiffractionSubOutput.HitPersistentPrimitiveIndexes = HitObjectsPersistentPrimitiveIndexes;
 		for (int32 HitIndex = 0; HitIndex < HitObjectsPersistentPrimitiveIndexes.Num(); ++HitIndex)
@@ -3606,11 +3572,10 @@ FString ASonoTraceUEActor::DebugRunMeshPreprocessingTest(int32 NumberOfTriangles
 
 	int32 ResolvedFrequencyCount = NumberOfFrequencies;
 
-	UE_LOG(SonoTraceUE, Log, TEXT("===== Starting Mesh Preprocessing Performance Test ====="));
+	UE_LOG(SonoTraceUE, Log, TEXT("===== Starting Mesh Preprocessing Test ====="));
 	UE_LOG(SonoTraceUE, Log, TEXT("Description: %s"), *TestDescription);
-	UE_LOG(SonoTraceUE, Log, TEXT("Number of Triangles: %d"), NumberOfTriangles);
-	UE_LOG(SonoTraceUE, Log, TEXT("Number of Frequencies: %d"), ResolvedFrequencyCount);
 	UE_LOG(SonoTraceUE, Log, TEXT("Timestamp: %s"), *TestTimestamp);
+	UE_LOG(SonoTraceUE, Log, TEXT("Parameters: Triangles=%d, Frequencies=%d"), NumberOfTriangles, ResolvedFrequencyCount);
 
 	FSonoTraceUEMeshDataStruct TestMeshData;
 	FSonoTraceUEObjectSettingsStruct TestObjectSettings;
@@ -3798,7 +3763,7 @@ FString ASonoTraceUEActor::DebugRunMeshPreprocessingTest(int32 NumberOfTriangles
 		MemoryUsedMB);
 	FString CSVFormattedData = CSVHeader + CSVRow;
 
-	UE_LOG(SonoTraceUE, Log, TEXT("===== Performance Test Results ====="));
+	UE_LOG(SonoTraceUE, Log, TEXT("===== Mesh Preprocessing Test Results ====="));
 	UE_LOG(SonoTraceUE, Log, TEXT("Triangles: %d | Frequencies: %d"), NumberOfTriangles, ResolvedFrequencyCount);
 	UE_LOG(SonoTraceUE, Log, TEXT("Total calculation time: %.3f ms"), TotalCalculationTimeMs);
 	UE_LOG(SonoTraceUE, Log, TEXT("  - Curvature calculation: %.3f ms (%.1f%%)"), 
@@ -3814,7 +3779,7 @@ FString ASonoTraceUEActor::DebugRunMeshPreprocessingTest(int32 NumberOfTriangles
 	if (bSaveToFile)
 	{
 		FString TargetFilePath = FilePath;
-		if (TargetFilePath.IsEmpty())TargetFilePath = FPaths::ProjectSavedDir() + TEXT("SonoTraceUE/PerformanceTest.csv");
+		if (TargetFilePath.IsEmpty())TargetFilePath = FPaths::ProjectSavedDir() + TEXT("SonoTraceUE/MeshPreprocessingTest.csv");
 
 		FString DirectoryPath = FPaths::GetPath(TargetFilePath);
 		if (!FPlatformFileManager::Get().GetPlatformFile().DirectoryExists(*DirectoryPath))FPlatformFileManager::Get().GetPlatformFile().CreateDirectoryTree(*DirectoryPath);
@@ -3825,21 +3790,21 @@ FString ASonoTraceUEActor::DebugRunMeshPreprocessingTest(int32 NumberOfTriangles
 		if (!bFileExists || !bAppendToFile)
 		{
 			ContentToWrite = CSVFormattedData;
-			UE_LOG(SonoTraceUE, Log, TEXT("Creating new performance test CSV file: %s"), *TargetFilePath);
+			UE_LOG(SonoTraceUE, Log, TEXT("Creating new mesh preprocessing test CSV file: %s"), *TargetFilePath);
 		}
 		else if (bAppendToFile && bFileExists)
 		{
 			ContentToWrite = CSVRow;
-			UE_LOG(SonoTraceUE, Log, TEXT("Appending to existing performance test CSV file: %s"), *TargetFilePath);
+			UE_LOG(SonoTraceUE, Log, TEXT("Appending to existing mesh preprocessing test CSV file: %s"), *TargetFilePath);
 		}
 
 		if (FFileHelper::SaveStringToFile(ContentToWrite, *TargetFilePath, FFileHelper::EEncodingOptions::AutoDetect, &IFileManager::Get(), bAppendToFile ? EFileWrite::FILEWRITE_Append : EFileWrite::FILEWRITE_NoFail))
 		{
-			UE_LOG(SonoTraceUE, Log, TEXT("Successfully saved performance test results to: %s"), *TargetFilePath);
+			UE_LOG(SonoTraceUE, Log, TEXT("Successfully saved mesh preprocessing test results to: %s"), *TargetFilePath);
 		}
 		else
 		{
-			UE_LOG(SonoTraceUE, Warning, TEXT("Failed to save performance test results to: %s"), *TargetFilePath);
+			UE_LOG(SonoTraceUE, Warning, TEXT("Failed to save mesh preprocessing test results to: %s"), *TargetFilePath);
 		}
 	}
 	
@@ -3872,19 +3837,25 @@ FString ASonoTraceUEActor::DebugRunMeshPreprocessingTest(int32 NumberOfTriangles
 	return CSVFormattedData;
 }
 
-FString ASonoTraceUEActor::DebugRunSimulationParameterTest(const TArray<FVector>& EmitterPositions, const TArray<FVector>& ReceiverPositions, int32 NumberOfInitialRays, int32 MaxBounces, bool EnableDiffractionComponentCalculation,
-	                                                       int32 DiffractionSimDivisionFactor, int32 NumberOfSimFrequencies, const FString& TestDescription, bool bSaveToFile, const FString& FilePath, bool bAppendToFile)
+FString ASonoTraceUEActor::DebugRunSimulationTest(bool testRayTracingParcing, bool testSpecularSimulation, bool testDiffractionSimulation, 
+	                                              const TArray<FVector>& InputEmitterPositions, const TArray<FVector>& InputReceiverPositions, int32 InputNumberOfInitialRays, int32 InputMaxBounces,
+	                                              int32 InputNumberOfSimFrequencies, int32 NumberOfRuns, const FString& TestDescription, bool bSaveToFile, const FString& FilePath, bool bAppendToFile)
 {
 	const FString TestTimestamp = FDateTime::Now().ToString(TEXT("%Y-%m-%d %H:%M:%S"));
 	
-	UE_LOG(SonoTraceUE, Log, TEXT("===== Starting Simulation Parameter Test ====="));
+	UE_LOG(SonoTraceUE, Log, TEXT("===== Starting Simulation Test ====="));
 	UE_LOG(SonoTraceUE, Log, TEXT("Description: %s"), *TestDescription);
 	UE_LOG(SonoTraceUE, Log, TEXT("Timestamp: %s"), *TestTimestamp);
+	UE_LOG(SonoTraceUE, Log, TEXT("Parameters: Rays=%d, MaxBounces=%d, Emitters=%d, Receivers=%d, Frequencies=%d, Runs=%d"),
+		InputNumberOfInitialRays, InputMaxBounces, InputEmitterPositions.Num(), InputReceiverPositions.Num(), InputNumberOfSimFrequencies, NumberOfRuns);
+	UE_LOG(SonoTraceUE, Log, TEXT("Tests: RayTracingParsing=%s, Specular=%s, Diffraction=%s"),
+		testRayTracingParcing ? TEXT("ON") : TEXT("OFF"),
+		testSpecularSimulation ? TEXT("ON") : TEXT("OFF"),
+		testDiffractionSimulation ? TEXT("ON") : TEXT("OFF"));	
 	
-	// Check if InputSettings exists and DebugDisableInitialization is set
 	if (!InputSettings)
 	{
-		UE_LOG(SonoTraceUE, Error, TEXT("InputSettings is not assigned! Cannot run simulation parameter test."));
+		UE_LOG(SonoTraceUE, Error, TEXT("InputSettings is not assigned! Cannot run simulation test."));
 		return TEXT("Error: InputSettings not assigned");
 	}
 	
@@ -3894,90 +3865,196 @@ FString ASonoTraceUEActor::DebugRunSimulationParameterTest(const TArray<FVector>
 		return TEXT("Error: DebugDisableInitialization not enabled");
 	}
 	
-	// Store original values to restore later
-	const int32 OriginalNumberOfInitialRays = InputSettings->NumberOfInitialRays;
-	const int32 OriginalMaxBounces = InputSettings->MaximumBounces;
-	const bool OriginalEnableDiffractionComponentCalculation = InputSettings->EnableDiffractionComponentCalculation;
-	const int32 OriginalDiffractionSimDivisionFactor = InputSettings->DiffractionSimDivisionFactor;
-	const int32 OriginalNumberOfSimFrequencies = InputSettings->NumberOfSimFrequencies;
-	const bool OriginalEnableEmitterPositionsDataTable = InputSettings->EnableEmitterPositionsDataTable;
-	const bool OriginalEnableReceiverPositionsDataTable = InputSettings->EnableReceiverPositionsDataTable;
-	const TArray<FVector> OriginalEmitterPositions = InputSettings->EmitterPositions;
-	const TArray<FVector> OriginalReceiverPositions = InputSettings->ReceiverPositions;
+	UE_LOG(SonoTraceUE, Log, TEXT("Initializing debug settings and generating mesh data..."));
 	
-	// Apply test parameters to InputSettings
-	InputSettings->NumberOfInitialRays = NumberOfInitialRays;
-	InputSettings->MaximumBounces = MaxBounces;
-	InputSettings->EnableDiffractionComponentCalculation = EnableDiffractionComponentCalculation;
-	InputSettings->DiffractionSimDivisionFactor = DiffractionSimDivisionFactor;
-	InputSettings->NumberOfSimFrequencies = NumberOfSimFrequencies;
-	
-	// Use provided positions or defaults
-	TArray<FVector> TestEmitterPositions = EmitterPositions;
-	TArray<FVector> TestReceiverPositions = ReceiverPositions;
-	
-	if (TestEmitterPositions.Num() == 0)
-	{
-		TestEmitterPositions.Append(OriginalEmitterPositions);
-	}
-	
-	if (TestReceiverPositions.Num() == 0)
-	{
-		TestReceiverPositions.Append(OriginalReceiverPositions);
-	}
-	
-	// Disable data table loading and use manual positions for the test
+	InputSettings->NumberOfInitialRays = InputNumberOfInitialRays;
+	InputSettings->MaximumBounces = InputMaxBounces;
+	InputSettings->NumberOfSimFrequencies = InputNumberOfSimFrequencies;
 	InputSettings->EnableEmitterPositionsDataTable = false;
 	InputSettings->EnableReceiverPositionsDataTable = false;
-	InputSettings->EmitterPositions = TestEmitterPositions;
-	InputSettings->ReceiverPositions = TestReceiverPositions;
+	InputSettings->EmitterPositions = InputEmitterPositions.Num() > 0 ? InputEmitterPositions : TArray<FVector>{FVector(0, 0, 100)};
+	InputSettings->ReceiverPositions = InputReceiverPositions.Num() > 0 ? InputReceiverPositions : TArray<FVector>{FVector(0, 0, 0)};
+	InputSettings->EnableSpecularComponentCalculation = testSpecularSimulation;
+	InputSettings->EnableDiffractionComponentCalculation = testDiffractionSimulation;
+	InputSettings->MinimumSimFrequency = 25000.0f;
+	InputSettings->MaximumSimFrequency = 80000.0f;
+	InputSettings->PointsInSensorFrame = false;
+	InputSettings->EnableEmitterDirectivity = false;
+	InputSettings->EnableReceiverDirectivity = false;
+	InputSettings->SpecularMinimumStrength = 0.0f;
+	InputSettings->EnableSpecularSimulationOnlyOnLastHits = false;
+	InputSettings->EnableDirectPathComponentCalculation = false;
+	InputSettings->EnableRaytracing = true;
+	InputSettings->EnableRunSimulationOnlyOnTrigger = false; 
 	
-	const int32 ActualEmitterCount = TestEmitterPositions.Num();
-	const int32 ActualReceiverCount = TestReceiverPositions.Num();
+	TMap<UObject*, int32> DebugAssetToObjectTypeIndexSettings;
+	GeneratedSettings = GenerateInputSettings(InputSettings, &DebugAssetToObjectTypeIndexSettings);
 	
-	UE_LOG(SonoTraceUE, Log, TEXT("Test Parameters:"));
-	UE_LOG(SonoTraceUE, Log, TEXT("  - NumberOfInitialRays: %d"), NumberOfInitialRays);
-	UE_LOG(SonoTraceUE, Log, TEXT("  - MaximumBounces: %d"), MaxBounces);
-	UE_LOG(SonoTraceUE, Log, TEXT("  - EnableDiffractionComponentCalculation: %s"), EnableDiffractionComponentCalculation ? TEXT("true") : TEXT("false"));
-	UE_LOG(SonoTraceUE, Log, TEXT("  - NumberOfSimFrequencies: %d"), NumberOfSimFrequencies);
-	UE_LOG(SonoTraceUE, Log, TEXT("  - EmitterCount: %d"), ActualEmitterCount);
-	UE_LOG(SonoTraceUE, Log, TEXT("  - ReceiverCount: %d"), ActualReceiverCount);
+	ReceiverPoses.Empty();
+	EmitterPoses.Empty();
+	UpdateTransformations();
 	
-	// Log emitter positions
-	for (int32 i = 0; i < TestEmitterPositions.Num(); ++i)
+	const double MeshDataStartTime = FPlatformTime::Seconds();
+	GenerateAllInitialMeshData();
+	const double MeshDataEndTime = FPlatformTime::Seconds();
+	const float MeshDataGenerationTimeMs = static_cast<float>((MeshDataEndTime - MeshDataStartTime) * 1000.0);
+	
+	UE_LOG(SonoTraceUE, Log, TEXT("Mesh data generation completed in %.3f ms"), MeshDataGenerationTimeMs);
+	
+	const int32 ActualEmitterCount = GeneratedSettings.FinalEmitterPositions.Num();
+	const int32 ActualReceiverCount = GeneratedSettings.FinalReceiverPositions.Num();
+	
+	Initialized = true;	
+	
+	const int64 SizeOfFloat = sizeof(float);
+	const int64 SizeOfInt32 = sizeof(int32);
+	const int64 SizeOfBool = sizeof(bool);
+	const int64 SizeOfFVector = sizeof(FVector);
+	const int64 SizeOfFName = sizeof(FName);
+	const int64 SizeOfDouble = sizeof(double);
+	const int64 SizeOfPointer = sizeof(void*);
+	const int64 TArrayOverhead = sizeof(TArray<float>);
+	
+	const int64 N = static_cast<int64>(InputNumberOfInitialRays); 
+	const int64 F = static_cast<int64>(InputNumberOfSimFrequencies); 
+	const int64 E = static_cast<int64>(ActualEmitterCount);
+	const int64 R = static_cast<int64>(ActualReceiverCount);  
+	const int64 B = static_cast<int64>(InputMaxBounces);  
+	
+	const int64 SizeOfFStructuredOutputBufferElem = sizeof(FStructuredOutputBufferElem);
+	
+	const int64 FSonoTraceUEPointStructBase = 2 * SizeOfFVector + SizeOfFName + 4 * SizeOfInt32 + 
+	                                          4 * SizeOfFloat + 5 * SizeOfBool + 2 * SizeOfPointer;
+	
+	const int64 TotalDistancesFromEmittersMemory = E * SizeOfFloat + TArrayOverhead;
+	const int64 EmitterDirectivitiesMemory = E * SizeOfFloat + TArrayOverhead;
+	const int64 StrengthsArrayMemory = E * R * F * SizeOfFloat + E * R * TArrayOverhead + E * TArrayOverhead + TArrayOverhead;
+	const int64 TotalDistancesToReceiversMemory = E * R * SizeOfFloat + E * TArrayOverhead + TArrayOverhead;
+	
+	const int64 FSonoTraceUEPointStructWorstCase = FSonoTraceUEPointStructBase + 
+	                                               TotalDistancesFromEmittersMemory + EmitterDirectivitiesMemory +
+	                                               StrengthsArrayMemory + TotalDistancesToReceiversMemory;
+	
+	const int64 FSonoTraceUESubOutputStructBaseOverhead = 3 * TArrayOverhead + SizeOfDouble + 3 * SizeOfFloat;
+	
+	const int64 RayTracingParsingInputElements = N * B;
+	const int64 RayTracingParsingInputMemory = RayTracingParsingInputElements * SizeOfFStructuredOutputBufferElem + TArrayOverhead;
+	
+	const int64 EmptyStrengthsOverhead = TArrayOverhead;  
+	const int64 EmptyTotalDistancesToReceiversOverhead = TArrayOverhead;  
+	const int64 SizeOfPointForParsing = FSonoTraceUEPointStructBase + TotalDistancesFromEmittersMemory + EmitterDirectivitiesMemory +
+	                                    EmptyStrengthsOverhead + EmptyTotalDistancesToReceiversOverhead;
+	const int64 RayTracingParsingOutputPoints = RayTracingParsingInputElements * SizeOfPointForParsing + TArrayOverhead;
+	const int64 RayTracingParsingReflectedStrengths = RayTracingParsingInputElements * SizeOfFloat + TArrayOverhead;
+	const int64 RayTracingParsingHitIndexes = RayTracingParsingInputElements * SizeOfInt32 + TArrayOverhead;
+	const int64 RayTracingParsingOutputMemory = RayTracingParsingOutputPoints + RayTracingParsingReflectedStrengths + 
+	                                            RayTracingParsingHitIndexes + FSonoTraceUESubOutputStructBaseOverhead;
+	
+	const float RayTracingParsingMemoryMB = static_cast<float>(RayTracingParsingInputMemory + RayTracingParsingOutputMemory) / (1024.0f * 1024.0f);
+	
+    const int64 SpecularPointsMemory = N * FSonoTraceUEPointStructWorstCase + TArrayOverhead;
+	const int64 SpecularReflectedStrengths = N * SizeOfFloat + TArrayOverhead;
+	const int64 SpecularHitIndexes = N * SizeOfInt32 + TArrayOverhead;  
+	const int64 SpecularSimulationTotalMemory = SpecularPointsMemory + SpecularReflectedStrengths + 
+	                                            SpecularHitIndexes + FSonoTraceUESubOutputStructBaseOverhead;
+	
+	const float SpecularSimulationMemoryMB = static_cast<float>(SpecularSimulationTotalMemory) / (1024.0f * 1024.0f);
+	
+	const int64 DiffractionPointsMemory = N * FSonoTraceUEPointStructWorstCase + TArrayOverhead;
+	const int64 DiffractionReflectedStrengths = N * SizeOfFloat + TArrayOverhead;
+	const int64 DiffractionHitIndexes = N * SizeOfInt32 + TArrayOverhead; 
+	const int64 DiffractionSimulationTotalMemory = DiffractionPointsMemory + DiffractionReflectedStrengths + 
+	                                               DiffractionHitIndexes + FSonoTraceUESubOutputStructBaseOverhead;
+	
+	const float DiffractionSimulationMemoryMB = static_cast<float>(DiffractionSimulationTotalMemory) / (1024.0f * 1024.0f);
+	
+	UE_LOG(SonoTraceUE, Log, TEXT("===== Memory Estimates (Worst Case) ====="));
+	UE_LOG(SonoTraceUE, Log, TEXT("Ray Tracing Parsing: %.3f MB"), 
+		RayTracingParsingMemoryMB);
+	UE_LOG(SonoTraceUE, Log, TEXT("  - Input (FStructuredOutputBufferElem): %.3f MB"), 
+		static_cast<float>(RayTracingParsingInputMemory) / (1024.0f * 1024.0f));
+	UE_LOG(SonoTraceUE, Log, TEXT("  - Output (FSonoTraceUESubOutputStruct): %.3f MB"), 
+		static_cast<float>(RayTracingParsingOutputMemory) / (1024.0f * 1024.0f));
+	UE_LOG(SonoTraceUE, Log, TEXT("Specular Simulation: %.3f MB "), 
+		SpecularSimulationMemoryMB);
+	UE_LOG(SonoTraceUE, Log, TEXT("Diffraction Simulation: %.3f MB"), 
+		DiffractionSimulationMemoryMB);
+	
+	TArray<float> AllRayTracingParsingTimes;
+	TArray<float> AllSpecularSimulationTimes;
+	TArray<float> AllDiffractionSimulationTimes;
+	
+	for (int32 RunIndex = 0; RunIndex < NumberOfRuns; ++RunIndex)
 	{
-		UE_LOG(SonoTraceUE, Log, TEXT("  - Emitter[%d]: (%.2f, %.2f, %.2f)"), 
-			i, TestEmitterPositions[i].X, TestEmitterPositions[i].Y, TestEmitterPositions[i].Z);
+		UE_LOG(SonoTraceUE, Log, TEXT("===== Run %d of %d ====="), RunIndex + 1, NumberOfRuns);
+		
+		float RayTracingParsingTimeMs = 0.0f;
+		float SpecularSimulationTimeMs = 0.0f;
+		float DiffractionSimulationTimeMs = 0.0f;
+		int32 NumberOfReflectionPoints = 0;
+	
+		if (testSpecularSimulation)
+		{
+			RunDebugSpecularSimulation(InputNumberOfInitialRays, InputNumberOfSimFrequencies, ActualEmitterCount, ActualReceiverCount, SpecularSimulationTimeMs);
+			UE_LOG(SonoTraceUE, Log, TEXT("Specular simulation completed in %.3f ms"), SpecularSimulationTimeMs);
+		}
+		
+		if (testRayTracingParcing)
+		{
+			RunDebugRayTracingParsing(InputMaxBounces, ActualEmitterCount, ActualReceiverCount, RayTracingParsingTimeMs, NumberOfReflectionPoints);
+			UE_LOG(SonoTraceUE, Log, TEXT("Ray tracing parsing completed in %.3f ms"), RayTracingParsingTimeMs);
+		}
+		
+		if (testDiffractionSimulation)
+		{		
+			RunDebugDiffractionSimulation(InputNumberOfInitialRays, InputNumberOfSimFrequencies, ActualEmitterCount, ActualReceiverCount, DiffractionSimulationTimeMs);
+			UE_LOG(SonoTraceUE, Log, TEXT("Diffraction simulation completed in %.3f ms"), DiffractionSimulationTimeMs);
+		}
+	
+		AllRayTracingParsingTimes.Add(RayTracingParsingTimeMs);
+		AllSpecularSimulationTimes.Add(SpecularSimulationTimeMs);
+		AllDiffractionSimulationTimes.Add(DiffractionSimulationTimeMs);
+		
+		const float TotalTimeMs = RayTracingParsingTimeMs + SpecularSimulationTimeMs + DiffractionSimulationTimeMs;
+		
+		UE_LOG(SonoTraceUE, Log, TEXT("Run %d completed in %.3f ms total"), RunIndex + 1, TotalTimeMs);
+	}
+
+	FString CSVHeader = TEXT("Timestamp,Description,RunIndex,NumberOfInitialRays,MaxBounces,EmitterCount,ReceiverCount,NumberOfSimFrequencies,RayTracingParsingTimeMs,SpecularSimulationTimeMs,DiffractionSimulationTimeMs,TotalTimeMs,RayTracingParsingMemoryMB,SpecularSimulationMemoryMB,DiffractionSimulationMemoryMB\n");
+	FString CSVRows;
+	
+	for (int32 RunIndex = 0; RunIndex < NumberOfRuns; ++RunIndex)
+	{
+		const float TotalTimeMs = AllRayTracingParsingTimes[RunIndex] + AllSpecularSimulationTimes[RunIndex] + AllDiffractionSimulationTimes[RunIndex];
+		
+		FString CSVRow = FString::Printf(TEXT("%s,\"%s\",%d,%d,%d,%d,%d,%d,%.15f,%.15f,%.15f,%.15f,%.15f,%.15f,%.15f\n"),
+			*TestTimestamp,
+			*TestDescription,
+			RunIndex + 1,
+			InputNumberOfInitialRays,
+			InputMaxBounces,
+			ActualEmitterCount,
+			ActualReceiverCount,
+			InputNumberOfSimFrequencies,
+			AllRayTracingParsingTimes[RunIndex],
+			AllSpecularSimulationTimes[RunIndex],
+			AllDiffractionSimulationTimes[RunIndex],
+			TotalTimeMs,
+			RayTracingParsingMemoryMB,
+			SpecularSimulationMemoryMB,
+			DiffractionSimulationMemoryMB);
+		
+		CSVRows += CSVRow;
 	}
 	
-	// Log receiver positions
-	for (int32 i = 0; i < TestReceiverPositions.Num(); ++i)
-	{
-		UE_LOG(SonoTraceUE, Log, TEXT("  - Receiver[%d]: (%.2f, %.2f, %.2f)"), 
-			i, TestReceiverPositions[i].X, TestReceiverPositions[i].Y, TestReceiverPositions[i].Z);
-	}
-	
-	FString CSVHeader = TEXT("Timestamp,Description,NumberOfInitialRays,MaxBounces,EnableDiffraction,DiffractionPointCount,EmitterCount,ReceiverCount,NumberOfSimFrequencies\n");
-	FString CSVRow = FString::Printf(TEXT("%s,\"%s\",%d,%d,%s,%d,%d,%d\n"),
-		*TestTimestamp,
-		*TestDescription,
-		NumberOfInitialRays,
-		MaxBounces,
-		EnableDiffractionComponentCalculation ? TEXT("true") : TEXT("false"),
-		ActualEmitterCount,
-		ActualReceiverCount,
-		NumberOfSimFrequencies);
-	FString CSVFormattedData = CSVHeader + CSVRow;
-	
-	UE_LOG(SonoTraceUE, Log, TEXT("===== Simulation Parameter Test Results ====="));
-	UE_LOG(SonoTraceUE, Log, TEXT("Parameters have been configured. You can now run simulation tests from Blueprint."));
+	FString CSVFormattedData = CSVHeader + CSVRows;
 	
 	if (bSaveToFile)
 	{
 		FString TargetFilePath = FilePath;
 		if (TargetFilePath.IsEmpty())
 		{
-			TargetFilePath = FPaths::ProjectSavedDir() + TEXT("SonoTraceUE/SimulationParameterTest.csv");
+			TargetFilePath = FPaths::ProjectSavedDir() + TEXT("SonoTraceUE/SimulationTest.csv");
 		}
 
 		FString DirectoryPath = FPaths::GetPath(TargetFilePath);
@@ -3992,27 +4069,841 @@ FString ASonoTraceUEActor::DebugRunSimulationParameterTest(const TArray<FVector>
 		if (!bFileExists || !bAppendToFile)
 		{
 			ContentToWrite = CSVFormattedData;
-			UE_LOG(SonoTraceUE, Log, TEXT("Creating new simulation parameter test CSV file: %s"), *TargetFilePath);
+			UE_LOG(SonoTraceUE, Log, TEXT("Creating new simulation test CSV file: %s"), *TargetFilePath);
 		}
 		else if (bAppendToFile && bFileExists)
 		{
-			ContentToWrite = CSVRow;
-			UE_LOG(SonoTraceUE, Log, TEXT("Appending to existing simulation parameter test CSV file: %s"), *TargetFilePath);
+			ContentToWrite = CSVRows; 
+			UE_LOG(SonoTraceUE, Log, TEXT("Appending %d run(s) to existing simulation test CSV file: %s"), NumberOfRuns, *TargetFilePath);
 		}
 
 		if (FFileHelper::SaveStringToFile(ContentToWrite, *TargetFilePath, FFileHelper::EEncodingOptions::AutoDetect, &IFileManager::Get(), bAppendToFile ? EFileWrite::FILEWRITE_Append : EFileWrite::FILEWRITE_NoFail))
 		{
-			UE_LOG(SonoTraceUE, Log, TEXT("Successfully saved simulation parameter test results to: %s"), *TargetFilePath);
+			UE_LOG(SonoTraceUE, Log, TEXT("Successfully saved %d run(s) to: %s"), NumberOfRuns, *TargetFilePath);
 		}
 		else
 		{
-			UE_LOG(SonoTraceUE, Warning, TEXT("Failed to save simulation parameter test results to: %s"), *TargetFilePath);
+			UE_LOG(SonoTraceUE, Warning, TEXT("Failed to save simulation test results to: %s"), *TargetFilePath);
 		}
-	}	
-	UE_LOG(SonoTraceUE, Log, TEXT("===== Test Configuration Complete ====="));
-	UE_LOG(SonoTraceUE, Log, TEXT("NOTE: Input settings have been modified with test parameters."));
+	}
+	
+	UE_LOG(SonoTraceUE, Log, TEXT("===== Test Complete ====="));
 	
 	return CSVFormattedData;
+}
+
+FString ASonoTraceUEActor::DebugRunRaytracingShaderTest(bool& bOutTestStarted, const TArray<FVector>& InputEmitterPositions, int32 InputNumberOfInitialRays, int32 InputMaxBounces,
+												        int32 NumberOfRuns, const FString& TestDescription, bool bSaveToFile, const FString& FilePath, bool bAppendToFile)
+{
+	// bOutTestStarted indicates if a new test was able to start (false if previous test still running)
+	bOutTestStarted = !bDebugRaytracingShaderTestActive;
+	
+	if (!bOutTestStarted)
+	{
+		UE_LOG(SonoTraceUE, Warning, TEXT("A debug raytracing shader test is already running. Wait for it to finish."));
+		return TEXT("Error: Test already running");
+	}
+	
+	const FString TestTimestamp = FDateTime::Now().ToString(TEXT("%Y-%m-%d %H:%M:%S"));
+	
+	UE_LOG(SonoTraceUE, Log, TEXT("===== Starting Raytracing Shader Test ====="));
+	UE_LOG(SonoTraceUE, Log, TEXT("Description: %s"), *TestDescription);
+	UE_LOG(SonoTraceUE, Log, TEXT("Timestamp: %s"), *TestTimestamp);
+	UE_LOG(SonoTraceUE, Log, TEXT("Parameters: Rays=%d, MaxBounces=%d, Emitters=%d, Runs=%d"),
+		InputNumberOfInitialRays, InputMaxBounces, InputEmitterPositions.Num(), NumberOfRuns);
+	
+	if (!InputSettings)
+	{
+		UE_LOG(SonoTraceUE, Error, TEXT("InputSettings is not assigned! Cannot run raytracing shader test."));
+		bOutTestStarted = false;
+		return TEXT("Error: InputSettings not assigned");
+	}
+	
+	if (!InputSettings->DebugDisableInitialization)
+	{
+		UE_LOG(SonoTraceUE, Warning, TEXT("DebugDisableInitialization is not enabled on InputSettings. Consider enabling it to prevent automatic initialization interfering with tests."));
+		bOutTestStarted = false;
+		return TEXT("Error: DebugDisableInitialization not enabled");
+	}
+	
+	UE_LOG(SonoTraceUE, Log, TEXT("Initializing debug settings and generating mesh data..."));
+	
+	InputSettings->NumberOfInitialRays = InputNumberOfInitialRays;
+	InputSettings->MaximumBounces = InputMaxBounces;
+	InputSettings->NumberOfSimFrequencies = 1;
+	InputSettings->EnableEmitterPositionsDataTable = false;
+	InputSettings->EnableReceiverPositionsDataTable = false;
+	InputSettings->EmitterPositions = InputEmitterPositions.Num() > 0 ? InputEmitterPositions : TArray<FVector>{FVector(0, 0, 100)};
+	InputSettings->ReceiverPositions = TArray<FVector>{FVector(0, 0, 0)};
+	InputSettings->EnableSpecularComponentCalculation = false;
+	InputSettings->EnableDiffractionComponentCalculation = false;
+	InputSettings->MinimumSimFrequency = 25000.0f;
+	InputSettings->MaximumSimFrequency = 80000.0f;
+	InputSettings->PointsInSensorFrame = false;
+	InputSettings->EnableEmitterDirectivity = false;
+	InputSettings->EnableReceiverDirectivity = false;
+	InputSettings->SpecularMinimumStrength = 0.0f;
+	InputSettings->EnableSpecularSimulationOnlyOnLastHits = false;
+	InputSettings->EnableDirectPathComponentCalculation = false;
+	InputSettings->EnableRaytracing = true;
+	InputSettings->EnableRunSimulationOnlyOnTrigger = false; 
+	
+	TMap<UObject*, int32> DebugAssetToObjectTypeIndexSettings;
+	GeneratedSettings = GenerateInputSettings(InputSettings, &DebugAssetToObjectTypeIndexSettings);
+	
+	ReceiverPoses.Empty();
+	EmitterPoses.Empty();
+	UpdateTransformations();
+	
+	const double MeshDataStartTime = FPlatformTime::Seconds();
+	GenerateAllInitialMeshData();
+	const double MeshDataEndTime = FPlatformTime::Seconds();
+	const float MeshDataGenerationTimeMs = static_cast<float>((MeshDataEndTime - MeshDataStartTime) * 1000.0);
+	
+	UE_LOG(SonoTraceUE, Log, TEXT("Mesh data generation completed in %.3f ms"), MeshDataGenerationTimeMs);
+	
+	const int32 ActualEmitterCount = GeneratedSettings.FinalEmitterPositions.Num();
+	const int32 ActualReceiverCount = GeneratedSettings.FinalReceiverPositions.Num();
+	
+	Initialized = true;
+	
+	float GPURaytracingMemoryMB = 0.0f;
+	const int64 FStructuredOutputBufferElemSize = sizeof(FStructuredOutputBufferElem);
+	
+
+	const uint32 NumDistributionRays = InputNumberOfInitialRays;
+	const uint32 NumOutputElements = NumDistributionRays * InputMaxBounces;
+	
+	const int64 AzimuthAnglesBufferSize = NumDistributionRays * sizeof(float);
+	const int64 ElevationAnglesBufferSize = NumDistributionRays * sizeof(float);
+	const int64 SensorConfigBufferSize = (7 + 3 * ActualEmitterCount) * sizeof(float);
+	const int64 StructuredOutputBufferSize = NumOutputElements * FStructuredOutputBufferElemSize;
+	
+	const int64 TotalGPUMemoryBytes = AzimuthAnglesBufferSize + ElevationAnglesBufferSize + 
+									  SensorConfigBufferSize + StructuredOutputBufferSize;
+	GPURaytracingMemoryMB = static_cast<float>(TotalGPUMemoryBytes) / (1024.0f * 1024.0f);
+	
+	UE_LOG(SonoTraceUE, Log, TEXT("Total GPU Memory: %.3f MB (%lld bytes)"), GPURaytracingMemoryMB, TotalGPUMemoryBytes);
+	
+	DebugRaytracingShaderTestTimestamp = TestTimestamp;
+	DebugRaytracingShaderTestDescription = TestDescription;
+	DebugRaytracingShaderTestNumberOfRuns = NumberOfRuns;
+	DebugRaytracingShaderTestCurrentRunIndex = 0;
+	DebugRaytracingShaderTestNumberOfInitialRays = InputNumberOfInitialRays;
+	DebugRaytracingShaderTestMaxBounces = InputMaxBounces;
+	DebugRaytracingShaderTestEmitterCount = ActualEmitterCount;
+	DebugRaytracingShaderTestGPURaytracingMemoryMB = GPURaytracingMemoryMB;
+	DebugRaytracingShaderTestSaveToFile = bSaveToFile;
+	DebugRaytracingShaderTestFilePath = FilePath;
+	DebugRaytracingShaderTestAppendToFile = bAppendToFile;
+	DebugRaytracingShaderTestRaytracingShaderTimes.Empty();
+	DebugRaytracingShaderTestRaytracingShaderTimes.Init(0.0f, NumberOfRuns);
+	DebugRaytracingTestState = 0;
+	
+	DebugSonoTrace = FSonoTrace(30.0f, true);
+	
+	if (DebugGPUReadback == nullptr)
+	{
+		DebugGPUReadback = new FRHIGPUBufferReadback(TEXT("DebugSonoTraceReadback"));
+	}
+	
+	EmitterPoses.Empty();
+	for (int32 i = 0; i < ActualEmitterCount; ++i)
+	{
+		EmitterPoses.Add(FTransform(FRotator::ZeroRotator, GeneratedSettings.FinalEmitterPositions[i]));
+	}
+	
+	FSonoTraceParameters Parameters;
+	Parameters.Scene = GetWorld()->Scene->GetRenderScene();
+	Parameters.GPUReadback = DebugGPUReadback;
+	Parameters.SensorPosition = GetActorLocation(); 
+	Parameters.SensorRotation = GetActorRotation();  
+	Parameters.DistributionAzimuthAngles = GeneratedSettings.AzimuthAngles;
+	Parameters.DistributionElevationAngles = GeneratedSettings.ElevationAngles;
+	Parameters.MaxTraceDistance = InputSettings->MaximumRayDistance;
+	Parameters.NumDistributionRays = GeneratedSettings.AzimuthAngles.Num();
+	Parameters.MaxBounces = static_cast<uint32>(InputMaxBounces);
+	TArray<FVector> EmitterPositionsForShader;
+	for (int32 EmitterIndex = 0; EmitterIndex < EmitterPoses.Num(); EmitterIndex++)
+	{
+		EmitterPositionsForShader.Add(EmitterPoses[EmitterIndex].GetLocation());
+	}
+	Parameters.EmitterPositions = EmitterPositionsForShader;
+	Parameters.EmitterCount = EmitterPoses.Num();	
+	Parameters.EnableDirectPath = false;
+	
+	// Validation logging for parameters being sent to shader
+	UE_LOG(SonoTraceUE, Log, TEXT("===== SHADER PARAMETER VALIDATION ====="));
+	UE_LOG(SonoTraceUE, Log, TEXT("NumDistributionRays (Parameters): %d"), Parameters.NumDistributionRays);
+	UE_LOG(SonoTraceUE, Log, TEXT("AzimuthAngles.Num(): %d"), Parameters.DistributionAzimuthAngles.Num());
+	UE_LOG(SonoTraceUE, Log, TEXT("ElevationAngles.Num(): %d"), Parameters.DistributionElevationAngles.Num());
+	UE_LOG(SonoTraceUE, Log, TEXT("MaxBounces: %d"), Parameters.MaxBounces);
+	UE_LOG(SonoTraceUE, Log, TEXT("EmitterCount: %d"), Parameters.EmitterCount);
+	UE_LOG(SonoTraceUE, Log, TEXT("EnableDirectPath: %s"), Parameters.EnableDirectPath ? TEXT("true") : TEXT("false"));
+	
+	const uint64 ExpectedOutputElements = (Parameters.DistributionAzimuthAngles.Num() + DirectPathAzimuthAngles.Num()) * static_cast<uint64>(Parameters.MaxBounces);
+	const uint64 ExpectedOutputBytes = ExpectedOutputElements * sizeof(FStructuredOutputBufferElem);
+	UE_LOG(SonoTraceUE, Log, TEXT("Expected output elements: %llu"), ExpectedOutputElements);
+	UE_LOG(SonoTraceUE, Log, TEXT("Expected output buffer size: %llu bytes (%.3f MB)"), 
+		ExpectedOutputBytes, static_cast<float>(ExpectedOutputBytes) / (1024.0f * 1024.0f));
+	UE_LOG(SonoTraceUE, Log, TEXT("========================================"));
+	
+	DebugSonoTrace.UpdateParameters(Parameters);
+	
+	ENQUEUE_RENDER_COMMAND(FSonoTraceDebugInit)([this](FRHICommandListImmediate&)
+	{
+		DebugSonoTrace.BeginRendering();
+	});
+	
+	bDebugSonoTraceInitialized = true;
+	DebugRaytracingPreviousExecutionCounter = DebugSonoTrace.ExecutionCounter;
+	
+	UE_LOG(SonoTraceUE, Log, TEXT("Debug raytracing shader test initialized. Async test will run across ticks."));
+	
+	bDebugRaytracingShaderTestActive = true;
+	
+	return TEXT("Debug raytracing shader test started (async).");
+}
+
+void ASonoTraceUEActor::DebugRaytracingShaderTestTick(float DeltaTime)
+{
+	if (!bDebugRaytracingShaderTestActive)
+	{
+		return;
+	}
+
+	if (DebugRaytracingShaderTestCurrentRunIndex >= DebugRaytracingShaderTestNumberOfRuns)
+	{
+		LastDebugRaytracingShaderTestCsv = BuildRaytracingShaderTestCsv();
+		UE_LOG(SonoTraceUE, Log, TEXT("===== All Raytracing Shader Test Runs Complete - Summary ====="));
+
+		if (DebugRaytracingShaderTestSaveToFile)
+		{
+			FString TargetFilePath = DebugRaytracingShaderTestFilePath;
+			if (TargetFilePath.IsEmpty())
+			{
+				TargetFilePath = FPaths::ProjectSavedDir() + TEXT("SonoTraceUE/RaytracingShaderTest.csv");
+			}
+
+			FString DirectoryPath = FPaths::GetPath(TargetFilePath);
+			if (!FPlatformFileManager::Get().GetPlatformFile().DirectoryExists(*DirectoryPath))
+			{
+				FPlatformFileManager::Get().GetPlatformFile().CreateDirectoryTree(*DirectoryPath);
+			}
+
+			bool bFileExists = FPlatformFileManager::Get().GetPlatformFile().FileExists(*TargetFilePath);
+			
+			FString CSVRowsOnly = LastDebugRaytracingShaderTestCsv;
+			int32 HeaderIndex = CSVRowsOnly.Find(TEXT("\n"));
+			if (HeaderIndex != INDEX_NONE)
+			{
+				CSVRowsOnly = CSVRowsOnly.Mid(HeaderIndex + 1);
+			}
+			
+			FString ContentToWrite;
+			if (!bFileExists || !DebugRaytracingShaderTestAppendToFile)
+			{
+				ContentToWrite = LastDebugRaytracingShaderTestCsv;
+				UE_LOG(SonoTraceUE, Log, TEXT("Creating new raytracing shader test CSV file: %s"), *TargetFilePath);
+			}
+			else
+			{
+				ContentToWrite = CSVRowsOnly;
+				UE_LOG(SonoTraceUE, Log, TEXT("Appending %d run(s) to existing raytracing shader test CSV file: %s"), DebugRaytracingShaderTestNumberOfRuns, *TargetFilePath);
+			}
+
+			if (FFileHelper::SaveStringToFile(ContentToWrite, *TargetFilePath, FFileHelper::EEncodingOptions::AutoDetect, &IFileManager::Get(), DebugRaytracingShaderTestAppendToFile ? EFileWrite::FILEWRITE_Append : EFileWrite::FILEWRITE_NoFail))
+			{
+				UE_LOG(SonoTraceUE, Log, TEXT("Successfully saved %d run(s) to: %s"), DebugRaytracingShaderTestNumberOfRuns, *TargetFilePath);
+			}
+			else
+			{
+				UE_LOG(SonoTraceUE, Warning, TEXT("Failed to save raytracing shader test results to: %s"), *TargetFilePath);
+			}
+		}
+
+		if (bDebugSonoTraceInitialized)
+		{
+			DebugSonoTrace.EndRendering();
+			bDebugSonoTraceInitialized = false;
+		}
+		if (DebugGPUReadback)
+		{
+			delete DebugGPUReadback;
+			DebugGPUReadback = nullptr;
+		}
+
+		bDebugRaytracingShaderTestActive = false;
+		UE_LOG(SonoTraceUE, Log, TEXT("===== Debug Raytracing Shader Test Complete ====="));
+		return;
+	}
+	
+	if (DebugRaytracingTestState == 0)
+	{
+		DebugRaytracingDispatchStartTime = FPlatformTime::Seconds();
+		DebugRaytracingPreviousExecutionCounter = DebugSonoTrace.ExecutionCounter;
+		
+		DebugSonoTrace.RunState = 1;
+		
+		DebugRaytracingTestState = 1;
+		UE_LOG(SonoTraceUE, Log, TEXT("Run %d/%d: Dispatched raytracing shader..."), 
+			DebugRaytracingShaderTestCurrentRunIndex + 1, DebugRaytracingShaderTestNumberOfRuns);
+	}
+	else if (DebugRaytracingTestState == 1)
+	{
+		if (DebugSonoTrace.RunState == 2 && DebugSonoTrace.ExecutionCounter > DebugRaytracingPreviousExecutionCounter)
+		{
+			if (DebugGPUReadback && DebugGPUReadback->IsReady())
+			{
+				const double EndTime = FPlatformTime::Seconds();
+				const float RaytracingShaderTimeMs = static_cast<float>((EndTime - DebugRaytracingDispatchStartTime) * 1000.0);
+
+				// ===== READBACK VALIDATION =====
+				// Always check allocated size on last run (safe, no Lock needed)
+				// Full readback validation (Lock/Unlock) causes debug warnings from Game Thread - enable only when needed
+				constexpr bool bEnableFullReadbackValidation = false;
+
+				if (DebugRaytracingShaderTestCurrentRunIndex == DebugRaytracingShaderTestNumberOfRuns - 1)
+				{
+					const uint64 ExpectedNumElements = static_cast<uint64>(DebugRaytracingShaderTestNumberOfInitialRays) * static_cast<uint64>(DebugRaytracingShaderTestMaxBounces);
+					const uint64 ExpectedByteSize = ExpectedNumElements * sizeof(FStructuredOutputBufferElem);
+					const uint32 AllocatedSize = DebugGPUReadback->GetGPUSizeBytes();
+
+					UE_LOG(SonoTraceUE, Log, TEXT("===== READBACK VALIDATION (Last Run) ====="));
+					UE_LOG(SonoTraceUE, Log, TEXT("Expected elements: %llu"), ExpectedNumElements);
+					UE_LOG(SonoTraceUE, Log, TEXT("Expected bytes: %llu (%.3f MB)"), ExpectedByteSize, static_cast<float>(ExpectedByteSize) / (1024.0f * 1024.0f));
+					UE_LOG(SonoTraceUE, Log, TEXT("Actual GPU allocated bytes: %u (%.3f MB)"), AllocatedSize, static_cast<float>(AllocatedSize) / (1024.0f * 1024.0f));
+
+					if (AllocatedSize == 0)
+					{
+						UE_LOG(SonoTraceUE, Error, TEXT("GPU buffer allocation FAILED - AllocatedSize is 0!"));
+						UE_LOG(SonoTraceUE, Error, TEXT("The shader did not produce any output. Timing is invalid."));
+					}
+					else if (AllocatedSize != ExpectedByteSize)
+					{
+						UE_LOG(SonoTraceUE, Warning, TEXT("GPU readback size mismatch! Expected: %llu, Actual: %u"), ExpectedByteSize, AllocatedSize);
+					}
+					else
+					{
+						UE_LOG(SonoTraceUE, Log, TEXT("GPU buffer allocation: SUCCESS - size matches expected"));
+					}
+					
+					// Full readback validation (Lock/Unlock) - only when explicitly enabled
+					if (bEnableFullReadbackValidation && AllocatedSize > 0)
+					{
+						FStructuredOutputBufferElem* ReadbackData = static_cast<FStructuredOutputBufferElem*>(
+							DebugGPUReadback->Lock(AllocatedSize));
+						
+						if (ReadbackData != nullptr)
+						{
+							UE_LOG(SonoTraceUE, Log, TEXT("Readback Lock: SUCCESS - buffer is valid"));
+							
+							int32 HitCount = 0;
+							int32 ValidElementCount = 0;
+							const int32 ActualNumElements = AllocatedSize / sizeof(FStructuredOutputBufferElem);
+							const int32 SampleSize = FMath::Min(ActualNumElements, 1000);
+							
+							for (int32 i = 0; i < SampleSize; ++i)
+							{
+								const FStructuredOutputBufferElem& Elem = ReadbackData[i];
+								if (Elem.IsHit)
+								{
+									HitCount++;
+									if (FMath::IsFinite(Elem.HitPosX) && FMath::IsFinite(Elem.HitPosY) && FMath::IsFinite(Elem.HitPosZ))
+									{
+										ValidElementCount++;
+									}
+								}
+							}
+							
+							UE_LOG(SonoTraceUE, Log, TEXT("Sampled first %d elements:"), SampleSize);
+							UE_LOG(SonoTraceUE, Log, TEXT("  - Hits: %d (%.2f%%)"), HitCount, (SampleSize > 0) ? (100.0f * HitCount / SampleSize) : 0.0f);
+							UE_LOG(SonoTraceUE, Log, TEXT("  - Valid hit positions: %d"), ValidElementCount);
+							
+							if (HitCount > 0)
+							{
+								for (int32 i = 0; i < SampleSize; ++i)
+								{
+									const FStructuredOutputBufferElem& Elem = ReadbackData[i];
+									if (Elem.IsHit)
+									{
+										UE_LOG(SonoTraceUE, Log, TEXT("  - First hit (element %d): Pos(%.2f, %.2f, %.2f), PrimitiveIdx=%d, TriIdx=%d, Dist=%.2f"),
+											i, Elem.HitPosX, Elem.HitPosY, Elem.HitPosZ, 
+											Elem.HitScenePrimitiveIndex, Elem.HitTriangleIndex, Elem.RayDistanceTotal);
+										break;
+									}
+								}
+							}
+							
+							DebugGPUReadback->Unlock();
+						}
+						else
+						{
+							UE_LOG(SonoTraceUE, Error, TEXT("Readback Lock: FAILED - buffer returned nullptr!"));
+						}
+					}
+					
+					UE_LOG(SonoTraceUE, Log, TEXT("=========================================="));
+				}
+				// ===== END READBACK VALIDATION =====
+				
+				DebugRaytracingShaderTestRaytracingShaderTimes[DebugRaytracingShaderTestCurrentRunIndex] = RaytracingShaderTimeMs;
+				
+				UE_LOG(SonoTraceUE, Log, TEXT("Run %d/%d: Raytracing shader completed in %.3f ms"), 
+					DebugRaytracingShaderTestCurrentRunIndex + 1, DebugRaytracingShaderTestNumberOfRuns, RaytracingShaderTimeMs);				
+
+				DebugRaytracingShaderTestCurrentRunIndex++;
+				DebugRaytracingTestState = 0;
+			}
+		}
+		
+		const double ElapsedSeconds = FPlatformTime::Seconds() - DebugRaytracingDispatchStartTime;
+		if (ElapsedSeconds > 30.0)
+		{
+			UE_LOG(SonoTraceUE, Warning, TEXT("Run %d/%d: Raytracing shader timeout after 30 seconds"), 
+				DebugRaytracingShaderTestCurrentRunIndex + 1, DebugRaytracingShaderTestNumberOfRuns);
+			
+			DebugRaytracingShaderTestRaytracingShaderTimes[DebugRaytracingShaderTestCurrentRunIndex] = 30000.0f;
+			DebugRaytracingShaderTestCurrentRunIndex++;
+			DebugRaytracingTestState = 0;
+		}
+	}
+}
+
+void ASonoTraceUEActor::RunDebugSpecularSimulation(int32 NumberOfInitialRays, int32 NumberOfSimFrequencies, int32 ActualEmitterCount, int32 ActualReceiverCount, float& OutTimeMs)
+{
+	const int32 SimulatedHitRayCount = NumberOfInitialRays;
+
+	FSonoTraceUESubOutputStruct TestRayTracingSubOutput;
+	TestRayTracingSubOutput.ReflectedPoints.SetNum(SimulatedHitRayCount);
+	TestRayTracingSubOutput.MaximumCurvature = 0.0f;
+	TestRayTracingSubOutput.MaximumStrength = 0.0f;
+	TestRayTracingSubOutput.MaximumTotalDistance = 0.0f;
+	TestRayTracingSubOutput.Timestamp = FDateTime::Now().ToUnixTimestamp();
+
+	TArray<float> FakeBRDF;
+	TArray<float> FakeMaterial;
+	FakeBRDF.Init(8.0f, NumberOfSimFrequencies);
+	FakeMaterial.Init(10.0f, NumberOfSimFrequencies);
+
+	for (int32 i = 0; i < SimulatedHitRayCount; ++i)
+	{
+		FSonoTraceUEPointStruct& Point = TestRayTracingSubOutput.ReflectedPoints[i];
+
+		const float Radius = FMath::FRandRange(100.0f, 5000.0f);
+		const float Theta = FMath::FRandRange(0.0f, 2.0f * PI);
+		const float Phi = FMath::FRandRange(0.0f, PI);
+		Point.Location = FVector(
+			Radius * FMath::Sin(Phi) * FMath::Cos(Theta),
+			Radius * FMath::Sin(Phi) * FMath::Sin(Theta),
+			Radius * FMath::Cos(Phi)
+		);
+
+		Point.ReflectionDirection = FVector(
+			FMath::FRandRange(-1.0f, 1.0f),
+			FMath::FRandRange(-1.0f, 1.0f),
+			FMath::FRandRange(-1.0f, 1.0f)
+		).GetSafeNormal();
+
+		Point.Label = FName(*FString::Printf(TEXT("TEST_POINT_%d"), i));
+		Point.Index = i;
+		Point.IsHit = true;
+		Point.IsLastHit = true;
+		Point.IsSpecular = true;
+		Point.IsDiffraction = false;
+		Point.IsDirectPath = false;
+		Point.RayIndex = i % FMath::Max(1, GeneratedSettings.AzimuthAngles.Num());
+		Point.BounceIndex = 0;
+		Point.ObjectTypeIndex = 0;
+		Point.CurvatureMagnitude = FMath::FRandRange(0.1f, 1.0f);
+		Point.TotalDistance = FMath::FRandRange(100.0f, 5000.0f);
+
+		Point.TotalDistancesFromEmitters.SetNum(ActualEmitterCount);
+		for (int32 EmitterIdx = 0; EmitterIdx < ActualEmitterCount; ++EmitterIdx)
+		{
+			Point.TotalDistancesFromEmitters[EmitterIdx] = FMath::FRandRange(100.0f, 5000.0f);
+		}
+
+		Point.DistanceToSensor = FMath::FRandRange(100.0f, 5000.0f);
+		Point.EmitterDirectivities.Init(1.0f, ActualEmitterCount);
+		Point.SurfaceBRDF = &FakeBRDF;
+		Point.SurfaceMaterial = &FakeMaterial;
+	}
+
+	TArray<FTransform> TestEmitterPoses;
+	for (int32 i = 0; i < ActualEmitterCount; ++i)
+	{
+		TestEmitterPoses.Add(FTransform(FRotator::ZeroRotator, GeneratedSettings.FinalEmitterPositions[i]));
+	}
+
+	TArray<FTransform> TestReceiverPoses;
+	for (int32 i = 0; i < ActualReceiverCount; ++i)
+	{
+		TestReceiverPoses.Add(FTransform(FRotator::ZeroRotator, GeneratedSettings.FinalReceiverPositions[i]));
+	}
+
+	FTransform TestWorldToSensorTransform = FTransform::Identity;
+
+	const double SpecularStartTime = FPlatformTime::Seconds();
+
+	RunSpecularComponentSimulation(
+		&TestRayTracingSubOutput,
+		InputSettings,
+		&GeneratedSettings,
+		TestWorldToSensorTransform,
+		TestEmitterPoses,
+		TestReceiverPoses
+	);
+
+	const double SpecularEndTime = FPlatformTime::Seconds();
+	OutTimeMs = static_cast<float>((SpecularEndTime - SpecularStartTime) * 1000.0);
+	
+	for (FSonoTraceUEPointStruct& Point : TestRayTracingSubOutput.ReflectedPoints)
+	{
+		Point.TotalDistancesFromEmitters.Empty();
+		Point.EmitterDirectivities.Empty();
+		Point.TotalDistancesToReceivers.Empty();
+		for (TArray<TArray<float>>& EmitterStrengths : Point.Strengths)
+		{
+			for (TArray<float>& ReceiverStrengths : EmitterStrengths)
+			{
+				ReceiverStrengths.Empty();
+			}
+			EmitterStrengths.Empty();
+		}
+		Point.Strengths.Empty();
+	}
+	TestRayTracingSubOutput.ReflectedPoints.Empty();
+	TestRayTracingSubOutput.ReflectedStrengths.Empty();
+	TestRayTracingSubOutput.HitPersistentPrimitiveIndexes.Empty();
+	FakeBRDF.Empty();
+	FakeMaterial.Empty();
+	TestEmitterPoses.Empty();
+	TestReceiverPoses.Empty();
+}
+
+void ASonoTraceUEActor::RunDebugRayTracingParsing(int32 MaxBounces, int32 ActualEmitterCount, int32 ActualReceiverCount, float& OutTimeMs, int32& OutReflectionPointCount)
+{
+	const int32 TotalRays = GeneratedSettings.AzimuthAngles.Num();
+	const int32 TotalOutputElements = TotalRays * MaxBounces;
+
+	TArray<FStructuredOutputBufferElem> FakeRayTracingRawOutput;
+	FakeRayTracingRawOutput.SetNum(TotalOutputElements);
+
+	int32 DebugScenePrimitiveIndex = 0;
+	if (ScenePrimitiveIndexToPersistentPrimitiveIndex.Num() > 0)
+	{
+		DebugScenePrimitiveIndex = ScenePrimitiveIndexToPersistentPrimitiveIndex.CreateConstIterator().Key();
+	}
+
+	for (int32 RayIndex = 0; RayIndex < TotalRays; ++RayIndex)
+	{
+		for (int32 BounceIndex = 0; BounceIndex < MaxBounces; ++BounceIndex)
+		{
+			const int32 OutputIndex = RayIndex * MaxBounces + BounceIndex;
+			FStructuredOutputBufferElem& Elem = FakeRayTracingRawOutput[OutputIndex];
+
+			Elem.IsHit = true;
+			Elem.HitLineOfSightToSensor = true;
+			Elem.DirectPath = 0;
+
+			const float Radius = FMath::FRandRange(100.0f, 5000.0f);
+			const float Theta = FMath::FRandRange(0.0f, 2.0f * PI);
+			const float Phi = FMath::FRandRange(0.0f, PI);
+			Elem.HitPosX = Radius * FMath::Sin(Phi) * FMath::Cos(Theta);
+			Elem.HitPosY = Radius * FMath::Sin(Phi) * FMath::Sin(Theta);
+			Elem.HitPosZ = Radius * FMath::Cos(Phi);
+
+			FVector ReflectionDir = FVector(
+				FMath::FRandRange(-1.0f, 1.0f),
+				FMath::FRandRange(-1.0f, 1.0f),
+				FMath::FRandRange(-1.0f, 1.0f)
+			).GetSafeNormal();
+			Elem.HitReflectionX = ReflectionDir.X;
+			Elem.HitReflectionY = ReflectionDir.Y;
+			Elem.HitReflectionZ = ReflectionDir.Z;
+
+			Elem.HitScenePrimitiveIndex = DebugScenePrimitiveIndex;
+			Elem.HitTriangleIndex = 0;
+			Elem.RayDistanceTotal = FMath::FRandRange(100.0f, 5000.0f);
+
+			for (int32 EmitterIdx = 0; EmitterIdx < ActualEmitterCount && EmitterIdx < MaxEmitterCount; ++EmitterIdx)
+			{
+				Elem.DistancesFromEmitterTotal[EmitterIdx] = FMath::FRandRange(100.0f, 5000.0f);
+			}
+		}
+	}
+
+	TArray<FTransform> ParseTestEmitterPoses;
+	for (int32 i = 0; i < ActualEmitterCount; ++i)
+	{
+		ParseTestEmitterPoses.Add(FTransform(FRotator::ZeroRotator, GeneratedSettings.FinalEmitterPositions[i]));
+	}
+
+	FVector TestSensorLocation = FVector::ZeroVector;
+
+	const double ParsingStartTime = FPlatformTime::Seconds();
+
+	FSonoTraceUESubOutputStruct ParseTestRayTracingSubOutput;
+	ParseTestRayTracingSubOutput.ReflectedPoints.Init(FSonoTraceUEPointStruct(), TotalOutputElements);
+	ParseTestRayTracingSubOutput.HitPersistentPrimitiveIndexes.Empty();
+	ParseTestRayTracingSubOutput.Timestamp = FDateTime::Now().ToUnixTimestamp();
+	ParseTestRayTracingSubOutput.MaximumCurvature = 0.0f;
+	ParseTestRayTracingSubOutput.MaximumStrength = 0.0f;
+	ParseTestRayTracingSubOutput.MaximumTotalDistance = 0.0f;
+
+	int32 SavedPointIndex = 0;
+	for (int32 RayIndex = 0; RayIndex < TotalRays; ++RayIndex)
+	{
+		bool CurrentRayIsHitting = false;
+		TArray<float> CachedSourceDirectivities;
+		CachedSourceDirectivities.Init(1.0f, ActualEmitterCount);
+
+		for (int32 BounceIndex = 0; BounceIndex < MaxBounces; ++BounceIndex)
+		{
+			const int32 OutputIndex = RayIndex * MaxBounces + BounceIndex;
+
+			if (OutputIndex < 0 || OutputIndex >= TotalOutputElements)
+			{
+				continue;
+			}
+
+			const FStructuredOutputBufferElem& CurrentRayTracingOutput = FakeRayTracingRawOutput[OutputIndex];
+			if (CurrentRayTracingOutput.IsHit)
+			{
+				CurrentRayIsHitting = true;
+
+				if (CurrentRayTracingOutput.HitLineOfSightToSensor)
+				{
+					FVector HitLocation = FVector(
+						CurrentRayTracingOutput.HitPosX,
+						CurrentRayTracingOutput.HitPosY,
+						CurrentRayTracingOutput.HitPosZ
+					);
+
+					FVector HitReflectionDirection(
+						CurrentRayTracingOutput.HitReflectionX,
+						CurrentRayTracingOutput.HitReflectionY,
+						CurrentRayTracingOutput.HitReflectionZ
+					);
+
+					const float DistanceToSensor = FVector::Distance(HitLocation, TestSensorLocation);
+					FName ObjectName = FName(TEXT("TEST_OBJECT"));
+					int32 ObjectTypeIndex = 0;
+					const float RayDistanceTotal = CurrentRayTracingOutput.RayDistanceTotal;
+
+					TArray<float> RayDistancesTotalFromEmitters;
+					RayDistancesTotalFromEmitters.SetNum(ActualEmitterCount);
+					for (int32 EmitterIdx = 0; EmitterIdx < ActualEmitterCount && EmitterIdx < MaxEmitterCount; ++EmitterIdx)
+					{
+						RayDistancesTotalFromEmitters[EmitterIdx] = CurrentRayTracingOutput.DistancesFromEmitterTotal[EmitterIdx];
+					}
+
+					float CurvatureMagnitude = FMath::FRandRange(0.1f, 1.0f);
+					TArray<float>* SurfaceBRDF = &GeneratedSettings.ObjectSettings[0].DefaultTriangleBRDF;
+					TArray<float>* SurfaceMaterial = &GeneratedSettings.ObjectSettings[0].DefaultTriangleMaterial;
+
+					ParseTestRayTracingSubOutput.ReflectedPoints[SavedPointIndex] = FSonoTraceUEPointStruct(
+						HitLocation,
+						HitReflectionDirection,
+						ObjectName,
+						OutputIndex,
+						RayDistanceTotal,
+						RayDistancesTotalFromEmitters,
+						DistanceToSensor,
+						ObjectTypeIndex,
+						CurvatureMagnitude,
+						SurfaceBRDF,
+						SurfaceMaterial,
+						RayIndex,
+						BounceIndex,
+						CachedSourceDirectivities
+					);
+
+					SavedPointIndex++;
+
+					if (CurvatureMagnitude > ParseTestRayTracingSubOutput.MaximumCurvature)
+						ParseTestRayTracingSubOutput.MaximumCurvature = CurvatureMagnitude;
+					if (RayDistanceTotal > ParseTestRayTracingSubOutput.MaximumTotalDistance)
+						ParseTestRayTracingSubOutput.MaximumTotalDistance = RayDistanceTotal;
+				}
+			}
+			else
+			{
+				if (CurrentRayIsHitting)
+					ParseTestRayTracingSubOutput.ReflectedPoints[SavedPointIndex - 1].IsLastHit = true;
+				break;
+			}
+		}
+	}
+
+	ParseTestRayTracingSubOutput.ReflectedPoints.RemoveAt(SavedPointIndex, ParseTestRayTracingSubOutput.ReflectedPoints.Num() - SavedPointIndex);
+
+	const double ParsingEndTime = FPlatformTime::Seconds();
+	OutTimeMs = static_cast<float>((ParsingEndTime - ParsingStartTime) * 1000.0);
+	OutReflectionPointCount = ParseTestRayTracingSubOutput.ReflectedPoints.Num();
+	
+	for (FSonoTraceUEPointStruct& Point : ParseTestRayTracingSubOutput.ReflectedPoints)
+	{
+		Point.TotalDistancesFromEmitters.Empty();
+		Point.EmitterDirectivities.Empty();
+	}
+	ParseTestRayTracingSubOutput.ReflectedPoints.Empty();
+	ParseTestRayTracingSubOutput.ReflectedStrengths.Empty();
+	ParseTestRayTracingSubOutput.HitPersistentPrimitiveIndexes.Empty();
+	FakeRayTracingRawOutput.Empty();
+	ParseTestEmitterPoses.Empty();
+}
+
+void ASonoTraceUEActor::RunDebugDiffractionSimulation(int32 NumberOfInitialRays, int32 NumberOfSimFrequencies, int32 ActualEmitterCount, int32 ActualReceiverCount, float& OutTimeMs)
+{
+	if (PersistentPrimitiveIndexToMeshDataIndex.Num() == 0 || GeneratedSettings.ObjectSettings.Num() == 0)
+	{
+		OutTimeMs = 0.0f;
+		return;
+	}
+
+	TArray<FTransform> TestEmitterPoses;
+	for (int32 i = 0; i < ActualEmitterCount; ++i)
+	{
+		TestEmitterPoses.Add(FTransform(FRotator::ZeroRotator, GeneratedSettings.FinalEmitterPositions[i]));
+	}
+
+	TArray<FTransform> TestReceiverPoses;
+	for (int32 i = 0; i < ActualReceiverCount; ++i)
+	{
+		TestReceiverPoses.Add(FTransform(FRotator::ZeroRotator, GeneratedSettings.FinalReceiverPositions[i]));
+	}
+
+	FVector TestSensorLocation = FVector::ZeroVector;
+	FVector FixedWorldPosition = FVector(0, 0, 100);
+	FVector FixedNormal = FVector(0, 0, 1);
+
+	const double DiffractionStartTime = FPlatformTime::Seconds();
+
+	FSonoTraceUESubOutputStruct TestDiffractionSubOutput;
+	TestDiffractionSubOutput.MaximumCurvature = 0.0f;
+	TestDiffractionSubOutput.MaximumStrength = 0.0f;
+	TestDiffractionSubOutput.MaximumTotalDistance = 0.0f;
+
+	for (int32 SampleIndex = 0; SampleIndex < NumberOfInitialRays; ++SampleIndex)
+	{
+		TArray<float> VectorEmitterToDiffractionDistance;
+		VectorEmitterToDiffractionDistance.Init(0, ActualEmitterCount);
+		FVector PointLocation = FixedWorldPosition;
+
+		for (int32 EmitterIndex = 0; EmitterIndex < ActualEmitterCount; ++EmitterIndex)
+		{
+			VectorEmitterToDiffractionDistance[EmitterIndex] = FVector::Dist(PointLocation, TestEmitterPoses[EmitterIndex].GetLocation());
+		}
+
+		float DistancePointToSensor = FVector::Dist(PointLocation, TestSensorLocation);
+
+		FSonoTraceUEPointStruct NewPoint;
+		NewPoint.TotalDistancesToReceivers.Init(TArray<float>(), ActualEmitterCount);
+		NewPoint.Strengths.SetNum(ActualEmitterCount);
+
+		float SummedStrength = 0.0f;
+		for (int32 EmitterIndex = 0; EmitterIndex < ActualEmitterCount; ++EmitterIndex)
+		{
+			NewPoint.Strengths[EmitterIndex].Init(TArray<float>(), ActualReceiverCount);
+			NewPoint.TotalDistancesToReceivers[EmitterIndex].Init(0, ActualReceiverCount);
+
+			for (int32 ReceiverIndex = 0; ReceiverIndex < ActualReceiverCount; ++ReceiverIndex)
+			{
+				NewPoint.Strengths[EmitterIndex][ReceiverIndex].Init(0, NumberOfSimFrequencies);
+
+				for (int32 FreqIndex = 0; FreqIndex < NumberOfSimFrequencies; ++FreqIndex)
+				{
+					FVector ReceiverLocation = TestReceiverPoses[ReceiverIndex].GetLocation();
+					float DistanceEmitterToPoint = (TestEmitterPoses[EmitterIndex].GetLocation() - PointLocation).Size();
+					float DistanceMicToPoint = (ReceiverLocation - PointLocation).Size();
+					float FullDistance = DistanceEmitterToPoint + DistanceMicToPoint;
+					NewPoint.TotalDistancesToReceivers[EmitterIndex][ReceiverIndex] = FullDistance;
+
+					float FullDistanceMeters = FullDistance / 100.0f;
+					float PathLossDiff = 1.0f / FMath::Square(FMath::Max(FullDistanceMeters, 0.01f));
+					float AlphaAbsorption = 0.038f * (GeneratedSettings.Frequencies[FreqIndex] / 1000.0f) - 0.3f;
+					float PathLossAbsorption = FMath::Pow(10.0f, -(AlphaAbsorption * FullDistanceMeters) / 20.0f);
+
+					float Strength = GeneratedSettings.ObjectSettings[0].MaterialStrengthsDiffraction[FreqIndex] *
+									 PathLossDiff * PathLossAbsorption;
+					NewPoint.Strengths[EmitterIndex][ReceiverIndex][FreqIndex] = Strength;
+					SummedStrength += Strength * Strength;
+				}
+			}
+		}
+
+		SummedStrength = SummedStrength / ActualReceiverCount / ActualEmitterCount / NumberOfSimFrequencies;
+
+		NewPoint.Location = PointLocation;
+		NewPoint.ReflectionDirection = FixedNormal;
+		NewPoint.Label = FName(TEXT("TEST_DIFFRACTION"));
+		NewPoint.Index = SampleIndex;
+		NewPoint.SummedStrength = SummedStrength;
+		NewPoint.TotalDistance = DistancePointToSensor;
+		NewPoint.TotalDistancesFromEmitters = VectorEmitterToDiffractionDistance;
+		NewPoint.DistanceToSensor = DistancePointToSensor;
+		NewPoint.ObjectTypeIndex = 0;
+		NewPoint.IsHit = true;
+		NewPoint.IsLastHit = true;
+		NewPoint.CurvatureMagnitude = 0.5f;
+		NewPoint.SurfaceBRDF = &GeneratedSettings.ObjectSettings[0].DefaultTriangleBRDF;
+		NewPoint.SurfaceMaterial = &GeneratedSettings.ObjectSettings[0].DefaultTriangleMaterial;
+		NewPoint.IsSpecular = false;
+		NewPoint.IsDiffraction = true;
+
+		TestDiffractionSubOutput.ReflectedPoints.Add(NewPoint);
+		TestDiffractionSubOutput.ReflectedStrengths.Add(SummedStrength);
+
+		if (SummedStrength > TestDiffractionSubOutput.MaximumStrength)
+			TestDiffractionSubOutput.MaximumStrength = SummedStrength;
+	}
+
+	const double DiffractionEndTime = FPlatformTime::Seconds();
+	OutTimeMs = static_cast<float>((DiffractionEndTime - DiffractionStartTime) * 1000.0);
+	
+	for (FSonoTraceUEPointStruct& Point : TestDiffractionSubOutput.ReflectedPoints)
+	{
+		Point.TotalDistancesFromEmitters.Empty();
+		Point.EmitterDirectivities.Empty();
+		Point.TotalDistancesToReceivers.Empty();
+		for (TArray<TArray<float>>& EmitterStrengths : Point.Strengths)
+		{
+			for (TArray<float>& ReceiverStrengths : EmitterStrengths)
+			{
+				ReceiverStrengths.Empty();
+			}
+			EmitterStrengths.Empty();
+		}
+		Point.Strengths.Empty();
+	}
+	TestDiffractionSubOutput.ReflectedPoints.Empty();
+	TestDiffractionSubOutput.ReflectedStrengths.Empty();
+	TestDiffractionSubOutput.HitPersistentPrimitiveIndexes.Empty();
+	TestEmitterPoses.Empty();
+	TestReceiverPoses.Empty();
+}
+
+FString ASonoTraceUEActor::BuildRaytracingShaderTestCsv() const
+{
+	FString CSVHeader = TEXT("Timestamp,Description,RunIndex,NumberOfInitialRays,MaxBounces,EmitterCount,GPURaytracingMemoryMB,RaytracingShaderTimeMs\n");
+	FString CSVRows;
+
+	for (int32 RunIndex = 0; RunIndex < DebugRaytracingShaderTestNumberOfRuns; ++RunIndex)
+	{
+		FString CSVRow = FString::Printf(TEXT("%s,\"%s\",%d,%d,%d,%d,%.15f,%.15f\n"),
+			*DebugRaytracingShaderTestTimestamp,
+			*DebugRaytracingShaderTestDescription,
+			RunIndex + 1,
+			DebugRaytracingShaderTestNumberOfInitialRays,
+			DebugRaytracingShaderTestMaxBounces,
+			DebugRaytracingShaderTestEmitterCount,			
+			DebugRaytracingShaderTestGPURaytracingMemoryMB,
+			DebugRaytracingShaderTestRaytracingShaderTimes[RunIndex]);
+		CSVRows += CSVRow;
+	}
+	return CSVHeader + CSVRows;
 }
 
 float ASonoTraceUEActor::SigmoidMix(const float X, const float Slope, const float Center, const float Value1, const float Value2)
