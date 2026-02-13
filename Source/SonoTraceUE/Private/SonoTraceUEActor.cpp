@@ -60,6 +60,15 @@ void ASonoTraceUEActor::BeginPlay()
 		UE_LOG(SonoTraceUE, Warning, TEXT("Input Settings Data Asset is not set. Using default simulation settings."));
 	}
 	
+	if(!InputSettings->EnableEmitterDirectivity)
+	{
+		if (InputSettings->DrawPointsColorMode==ESonoTraceUESimulationDrawColorModeEnum::EmitterDirectivity)
+		{
+			InputSettings->DrawPointsColorMode = ESonoTraceUESimulationDrawColorModeEnum::Static;
+			UE_LOG(SonoTraceUE, Warning, TEXT("Emitter directivity color mode disabled because emitter directivity is not enabled. Setting color mode to static."));
+		}
+	}
+	
 	if (!InputSettings->DebugDisableInitialization)
 	{
 		if (InputSettings->EnableSpecularComponentCalculation || InputSettings->EnableDirectPathComponentCalculation || InputSettings->EnableDiffractionComponentCalculation)
