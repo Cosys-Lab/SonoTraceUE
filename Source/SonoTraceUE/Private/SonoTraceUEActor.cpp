@@ -4358,11 +4358,7 @@ void ASonoTraceUEActor::DebugRaytracingShaderTestTick(float DeltaTime)
 				const double EndTime = FPlatformTime::Seconds();
 				const float RaytracingShaderTimeMs = static_cast<float>((EndTime - DebugRaytracingDispatchStartTime) * 1000.0);
 
-				// ===== READBACK VALIDATION =====
-				// Always check allocated size on last run (safe, no Lock needed)
-				// Full readback validation (Lock/Unlock) causes debug warnings from Game Thread - enable only when needed
 				constexpr bool bEnableFullReadbackValidation = false;
-
 				if (DebugRaytracingShaderTestCurrentRunIndex == DebugRaytracingShaderTestNumberOfRuns - 1)
 				{
 					const uint64 ExpectedNumElements = static_cast<uint64>(DebugRaytracingShaderTestNumberOfInitialRays) * static_cast<uint64>(DebugRaytracingShaderTestMaxBounces);
@@ -4388,7 +4384,6 @@ void ASonoTraceUEActor::DebugRaytracingShaderTestTick(float DeltaTime)
 						UE_LOG(SonoTraceUE, Log, TEXT("GPU buffer allocation: SUCCESS - size matches expected"));
 					}
 					
-					// Full readback validation (Lock/Unlock) - only when explicitly enabled
 					if (bEnableFullReadbackValidation && AllocatedSize > 0)
 					{
 						FStructuredOutputBufferElem* ReadbackData = static_cast<FStructuredOutputBufferElem*>(
@@ -4445,7 +4440,6 @@ void ASonoTraceUEActor::DebugRaytracingShaderTestTick(float DeltaTime)
 					
 					UE_LOG(SonoTraceUE, Log, TEXT("=========================================="));
 				}
-				// ===== END READBACK VALIDATION =====
 				
 				DebugRaytracingShaderTestRaytracingShaderTimes[DebugRaytracingShaderTestCurrentRunIndex] = RaytracingShaderTimeMs;
 				
