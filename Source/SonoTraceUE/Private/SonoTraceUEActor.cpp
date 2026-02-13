@@ -4008,7 +4008,9 @@ FString ASonoTraceUEActor::DebugRunSimulationTest(bool testRayTracingParcing, bo
 		if (testDiffractionSimulation)
 		{		
 			RunDebugDiffractionSimulation(InputNumberOfInitialRays, InputNumberOfSimFrequencies, ActualEmitterCount, ActualReceiverCount, DiffractionSimulationTimeMs);
-			UE_LOG(SonoTraceUE, Log, TEXT("Diffraction simulation completed in %.3f ms"), DiffractionSimulationTimeMs);
+			UE_LOG(SonoTraceUE, Log, TEXT("Old Diffraction simulation completed in %.3f ms"), DiffractionSimulationTimeMs);
+			RunDebugDiffractionSimulationNew(InputNumberOfInitialRays, InputNumberOfSimFrequencies, ActualEmitterCount, ActualReceiverCount, DiffractionSimulationTimeMs);
+			UE_LOG(SonoTraceUE, Log, TEXT("New Diffraction simulation completed in %.3f ms"), DiffractionSimulationTimeMs);
 		}
 	
 		AllRayTracingParsingTimes.Add(RayTracingParsingTimeMs);
@@ -4773,6 +4775,9 @@ void ASonoTraceUEActor::RunDebugDiffractionSimulation(int32 NumberOfInitialRays,
 	FVector FixedWorldPosition = FVector(0, 0, 100);
 	FVector FixedNormal = FVector(0, 0, 1);
 
+	// Set up line trace parameters (for fair comparison with real diffraction code)
+	FCollisionQueryParams TraceParams(FName(TEXT("DiffractionTraceTest")), true);
+
 	const double DiffractionStartTime = FPlatformTime::Seconds();
 
 	FSonoTraceUESubOutputStruct TestDiffractionSubOutput;
@@ -4782,9 +4787,25 @@ void ASonoTraceUEActor::RunDebugDiffractionSimulation(int32 NumberOfInitialRays,
 
 	for (int32 SampleIndex = 0; SampleIndex < NumberOfInitialRays; ++SampleIndex)
 	{
+		FVector PointLocation = FixedWorldPosition;
+
+		// --- LINE TRACE FOR LINE-OF-SIGHT CHECK (for fair test comparison) ---
+		// This simulates the line-of-sight check done in real diffraction code
+		// The result is intentionally ignored - we just want the execution cost
+		{
+			FHitResult HitResult;
+			GetWorld()->LineTraceSingleByChannel(
+				HitResult,
+				TestSensorLocation,
+				PointLocation,
+				ECC_Visibility,
+				TraceParams
+			);
+			// Result ignored - just executing the trace for fair timing comparison
+		}
+
 		TArray<float> VectorEmitterToDiffractionDistance;
 		VectorEmitterToDiffractionDistance.Init(0, ActualEmitterCount);
-		FVector PointLocation = FixedWorldPosition;
 
 		for (int32 EmitterIndex = 0; EmitterIndex < ActualEmitterCount; ++EmitterIndex)
 		{
@@ -4857,6 +4878,230 @@ void ASonoTraceUEActor::RunDebugDiffractionSimulation(int32 NumberOfInitialRays,
 	const double DiffractionEndTime = FPlatformTime::Seconds();
 	OutTimeMs = static_cast<float>((DiffractionEndTime - DiffractionStartTime) * 1000.0);
 	
+	for (FSonoTraceUEPointStruct& Point : TestDiffractionSubOutput.ReflectedPoints)
+	{
+		Point.TotalDistancesFromEmitters.Empty();
+		Point.EmitterDirectivities.Empty();
+		Point.TotalDistancesToReceivers.Empty();
+		for (TArray<TArray<float>>& EmitterStrengths : Point.Strengths)
+		{
+			for (TArray<float>& ReceiverStrengths : EmitterStrengths)
+			{
+				ReceiverStrengths.Empty();
+			}
+			EmitterStrengths.Empty();
+		}
+		Point.Strengths.Empty();
+	}
+	TestDiffractionSubOutput.ReflectedPoints.Empty();
+	TestDiffractionSubOutput.ReflectedStrengths.Empty();
+	TestDiffractionSubOutput.HitPersistentPrimitiveIndexes.Empty();
+	TestEmitterPoses.Empty();
+	TestReceiverPoses.Empty();
+}
+
+void ASonoTraceUEActor::RunDebugDiffractionSimulationNew(int32 NumberOfInitialRays, int32 NumberOfSimFrequencies, int32 ActualEmitterCount, int32 ActualReceiverCount, float& OutTimeMs)
+{
+	if (PersistentPrimitiveIndexToMeshDataIndex.Num() == 0 || GeneratedSettings.ObjectSettings.Num() == 0)
+	{
+		OutTimeMs = 0.0f;
+		return;
+	}
+
+	TArray<FTransform> TestEmitterPoses;
+	for (int32 i = 0; i < ActualEmitterCount; ++i)
+	{
+		TestEmitterPoses.Add(FTransform(FRotator::ZeroRotator, GeneratedSettings.FinalEmitterPositions[i]));
+	}
+
+	TArray<FTransform> TestReceiverPoses;
+	for (int32 i = 0; i < ActualReceiverCount; ++i)
+	{
+		TestReceiverPoses.Add(FTransform(FRotator::ZeroRotator, GeneratedSettings.FinalReceiverPositions[i]));
+	}
+
+	FVector TestSensorLocation = FVector::ZeroVector;
+	FVector FixedWorldPosition = FVector(0, 0, 100);
+	FVector FixedNormal = FVector(0, 0, 1);
+
+	const double DiffractionStartTime = FPlatformTime::Seconds();
+
+	// ---------------------------------------------------------
+	// STEP 1: GATHER CANDIDATES (Define candidate data for parallel processing)
+	// ---------------------------------------------------------
+	// Struct to hold data for each diffraction candidate
+	struct FDiffractionCandidate
+	{
+		int32 SampleIndex;
+		FVector WorldPosition;
+		FVector WorldNormal;
+	};
+
+	// Pre-allocate candidate array - for this test, all samples are valid candidates
+	TArray<FDiffractionCandidate> AllCandidates;
+	AllCandidates.SetNum(NumberOfInitialRays);
+
+	// Populate candidates (single-threaded gathering)
+	for (int32 SampleIndex = 0; SampleIndex < NumberOfInitialRays; ++SampleIndex)
+	{
+		FDiffractionCandidate& Cand = AllCandidates[SampleIndex];
+		Cand.SampleIndex = SampleIndex;
+		Cand.WorldPosition = FixedWorldPosition;
+		Cand.WorldNormal = FixedNormal;
+	}
+
+	// ---------------------------------------------------------
+	// STEP 2: PROCESS CANDIDATES (Parallel)
+	// ---------------------------------------------------------
+
+	// Pre-allocate OUTPUT arrays to WORST CASE size (all candidates are valid)
+	// Use SetNum (not SetNumUninitialized) to properly initialize elements to avoid crashes on assignment
+	TArray<FSonoTraceUEPointStruct> TempResults;
+	TempResults.SetNum(AllCandidates.Num());
+	
+	TArray<float> TempStrengths;
+	TempStrengths.SetNum(AllCandidates.Num());
+
+	// Atomic counter to track how many valid points were added
+	volatile int32 ValidPointCount = 0;
+
+	// Cache object settings pointer for thread safety (read-only access)
+	const FSonoTraceUEObjectSettingsStruct& CachedObjectSettings = GeneratedSettings.ObjectSettings[0];
+	const TArray<float>& CachedFrequencies = GeneratedSettings.Frequencies;
+	const TArray<float>& CachedMaterialStrengthsDiffraction = CachedObjectSettings.MaterialStrengthsDiffraction;
+	const TArray<float>* CachedDefaultTriangleBRDF = &CachedObjectSettings.DefaultTriangleBRDF;
+	const TArray<float>* CachedDefaultTriangleMaterial = &CachedObjectSettings.DefaultTriangleMaterial;
+
+	// Cache world pointer for line traces (thread-safe for read-only queries)
+	UWorld* CachedWorld = GetWorld();
+
+	// The Parallel Loop
+	ParallelFor(AllCandidates.Num(), [&](int32 Idx)
+	{
+		const FDiffractionCandidate& Cand = AllCandidates[Idx];
+		const FVector& PointLocation = Cand.WorldPosition;
+		const FVector& PointNormal = Cand.WorldNormal;
+
+		// --- LINE TRACE FOR LINE-OF-SIGHT CHECK (for fair test comparison) ---
+		// This simulates the line-of-sight check done in real diffraction code
+		// The result is intentionally ignored - we just want the execution cost
+		{
+			FCollisionQueryParams TraceParams(FName(TEXT("DiffractionTraceTest")), true);
+			FHitResult HitResult;
+			// Trace from sensor location to the diffraction point (same as real code)
+			CachedWorld->LineTraceSingleByChannel(
+				HitResult,
+				TestSensorLocation,
+				PointLocation,
+				ECC_Visibility,
+				TraceParams
+			);
+			// Result ignored - just executing the trace for fair timing comparison
+		}
+
+		// Calculate emitter to diffraction distances
+		TArray<float> VectorEmitterToDiffractionDistance;
+		VectorEmitterToDiffractionDistance.Init(0, ActualEmitterCount);
+
+		for (int32 EmitterIndex = 0; EmitterIndex < ActualEmitterCount; ++EmitterIndex)
+		{
+			VectorEmitterToDiffractionDistance[EmitterIndex] = FVector::Dist(PointLocation, TestEmitterPoses[EmitterIndex].GetLocation());
+		}
+
+		float DistancePointToSensor = FVector::Dist(PointLocation, TestSensorLocation);
+
+		// Build the point struct
+		FSonoTraceUEPointStruct NewPoint;
+		NewPoint.TotalDistancesToReceivers.Init(TArray<float>(), ActualEmitterCount);
+		NewPoint.Strengths.SetNum(ActualEmitterCount);
+
+		float SummedStrength = 0.0f;
+		for (int32 EmitterIndex = 0; EmitterIndex < ActualEmitterCount; ++EmitterIndex)
+		{
+			NewPoint.Strengths[EmitterIndex].Init(TArray<float>(), ActualReceiverCount);
+			NewPoint.TotalDistancesToReceivers[EmitterIndex].Init(0, ActualReceiverCount);
+
+			for (int32 ReceiverIndex = 0; ReceiverIndex < ActualReceiverCount; ++ReceiverIndex)
+			{
+				NewPoint.Strengths[EmitterIndex][ReceiverIndex].Init(0, NumberOfSimFrequencies);
+
+				for (int32 FreqIndex = 0; FreqIndex < NumberOfSimFrequencies; ++FreqIndex)
+				{
+					FVector ReceiverLocation = TestReceiverPoses[ReceiverIndex].GetLocation();
+					float DistanceEmitterToPoint = (TestEmitterPoses[EmitterIndex].GetLocation() - PointLocation).Size();
+					float DistanceMicToPoint = (ReceiverLocation - PointLocation).Size();
+					float FullDistance = DistanceEmitterToPoint + DistanceMicToPoint;
+					NewPoint.TotalDistancesToReceivers[EmitterIndex][ReceiverIndex] = FullDistance;
+
+					float FullDistanceMeters = FullDistance / 100.0f;
+					float PathLossDiff = 1.0f / FMath::Square(FMath::Max(FullDistanceMeters, 0.01f));
+					float AlphaAbsorption = 0.038f * (CachedFrequencies[FreqIndex] / 1000.0f) - 0.3f;
+					float PathLossAbsorption = FMath::Pow(10.0f, -(AlphaAbsorption * FullDistanceMeters) / 20.0f);
+
+					float Strength = CachedMaterialStrengthsDiffraction[FreqIndex] * PathLossDiff * PathLossAbsorption;
+					NewPoint.Strengths[EmitterIndex][ReceiverIndex][FreqIndex] = Strength;
+					SummedStrength += Strength * Strength;
+				}
+			}
+		}
+
+		SummedStrength = SummedStrength / ActualReceiverCount / ActualEmitterCount / NumberOfSimFrequencies;
+
+		NewPoint.Location = PointLocation;
+		NewPoint.ReflectionDirection = PointNormal;
+		NewPoint.Label = FName(TEXT("TEST_DIFFRACTION"));
+		NewPoint.Index = Cand.SampleIndex;
+		NewPoint.SummedStrength = SummedStrength;
+		NewPoint.TotalDistance = DistancePointToSensor;
+		NewPoint.TotalDistancesFromEmitters = MoveTemp(VectorEmitterToDiffractionDistance);
+		NewPoint.DistanceToSensor = DistancePointToSensor;
+		NewPoint.ObjectTypeIndex = 0;
+		NewPoint.IsHit = true;
+		NewPoint.IsLastHit = true;
+		NewPoint.CurvatureMagnitude = 0.5f;
+		NewPoint.SurfaceBRDF = const_cast<TArray<float>*>(CachedDefaultTriangleBRDF);
+		NewPoint.SurfaceMaterial = const_cast<TArray<float>*>(CachedDefaultTriangleMaterial);
+		NewPoint.IsSpecular = false;
+		NewPoint.IsDiffraction = true;
+
+		// --- CRITICAL SECTION: THREAD SAFE ADD ---
+		// Increment counter atomically. Returns the NEW value.
+		int32 WriteIndex = FPlatformAtomics::InterlockedIncrement(&ValidPointCount) - 1;
+
+		// Write to the pre-allocated arrays
+		TempResults[WriteIndex] = MoveTemp(NewPoint);
+		TempStrengths[WriteIndex] = SummedStrength;
+	});
+
+	// ---------------------------------------------------------
+	// STEP 3: CLEANUP & FINALIZE
+	// ---------------------------------------------------------
+
+	// Shrink arrays to actual number of valid items found
+	TempResults.SetNum(ValidPointCount);
+	TempStrengths.SetNum(ValidPointCount);
+
+	// Build final output struct
+	FSonoTraceUESubOutputStruct TestDiffractionSubOutput;
+	TestDiffractionSubOutput.MaximumCurvature = 0.0f;
+	TestDiffractionSubOutput.MaximumStrength = 0.0f;
+	TestDiffractionSubOutput.MaximumTotalDistance = 0.0f;
+	TestDiffractionSubOutput.ReflectedPoints = MoveTemp(TempResults);
+	TestDiffractionSubOutput.ReflectedStrengths = MoveTemp(TempStrengths);
+
+	// Calculate max stats (single-threaded loop over the reduced array)
+	for (const FSonoTraceUEPointStruct& Pt : TestDiffractionSubOutput.ReflectedPoints)
+	{
+		if (Pt.SummedStrength > TestDiffractionSubOutput.MaximumStrength)
+		{
+			TestDiffractionSubOutput.MaximumStrength = Pt.SummedStrength;
+		}
+	}
+
+	const double DiffractionEndTime = FPlatformTime::Seconds();
+	OutTimeMs = static_cast<float>((DiffractionEndTime - DiffractionStartTime) * 1000.0);
+	
+	// Cleanup memory
 	for (FSonoTraceUEPointStruct& Point : TestDiffractionSubOutput.ReflectedPoints)
 	{
 		Point.TotalDistancesFromEmitters.Empty();
