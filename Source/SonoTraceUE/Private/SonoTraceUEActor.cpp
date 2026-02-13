@@ -5242,6 +5242,103 @@ FString ASonoTraceUEActor::BuildRaytracingShaderTestCsv() const
 	return CSVHeader + CSVRows;
 }
 
+bool ASonoTraceUEActor::EstimateSimulationMemoryUsage(int32 NumEmitters, int32 NumReceivers, int32 NumFrequencies, int32 NumPoints, int32 NumBounces,
+	float& OutRayTracingParsingMemoryMB, float& OutSpecularMemoryMB, float& OutDiffractionMemoryMB, float& OutTotalMemoryMB)
+{
+	const int64 SizeOfFloat = sizeof(float);
+	const int64 SizeOfInt32 = sizeof(int32);
+	const int64 SizeOfBool = sizeof(bool);
+	const int64 SizeOfFVector = sizeof(FVector);
+	const int64 SizeOfFName = sizeof(FName);
+	const int64 SizeOfDouble = sizeof(double);
+	const int64 SizeOfPointer = sizeof(void*);
+	const int64 TArrayOverhead = sizeof(TArray<float>);
+	const int64 SizeOfFStructuredOutputBufferElem = sizeof(FStructuredOutputBufferElem);
+	
+	const int64 N = static_cast<int64>(NumPoints);
+	const int64 E = static_cast<int64>(NumEmitters);
+	const int64 R = static_cast<int64>(NumReceivers);
+	const int64 F = static_cast<int64>(NumFrequencies);
+	const int64 B = static_cast<int64>(NumBounces);
+	
+	const int64 FSonoTraceUEPointStructBase = 2 * SizeOfFVector + SizeOfFName + 4 * SizeOfInt32 + 
+	                                          4 * SizeOfFloat + 5 * SizeOfBool + 2 * SizeOfPointer;
+	
+	const int64 TotalDistancesFromEmittersMemory = E * SizeOfFloat + TArrayOverhead;
+	const int64 EmitterDirectivitiesMemory = E * SizeOfFloat + TArrayOverhead;
+	const int64 StrengthsArrayMemory = E * R * F * SizeOfFloat + E * R * TArrayOverhead + E * TArrayOverhead + TArrayOverhead;
+	const int64 TotalDistancesToReceiversMemory = E * R * SizeOfFloat + E * TArrayOverhead + TArrayOverhead;
+	
+	const int64 FSonoTraceUEPointStructWorstCase = FSonoTraceUEPointStructBase + 
+	                                               TotalDistancesFromEmittersMemory + EmitterDirectivitiesMemory +
+	                                               StrengthsArrayMemory + TotalDistancesToReceiversMemory;
+	
+	const int64 FSonoTraceUESubOutputStructBaseOverhead = 3 * TArrayOverhead + SizeOfDouble + 3 * SizeOfFloat;
+	
+	const int64 RayTracingParsingInputElements = N * B;
+	const int64 RayTracingParsingInputMemory = RayTracingParsingInputElements * SizeOfFStructuredOutputBufferElem + TArrayOverhead;
+	
+	const int64 EmptyStrengthsOverhead = TArrayOverhead;
+	const int64 EmptyTotalDistancesToReceiversOverhead = TArrayOverhead;
+	const int64 SizeOfPointForParsing = FSonoTraceUEPointStructBase + TotalDistancesFromEmittersMemory + EmitterDirectivitiesMemory +
+	                                    EmptyStrengthsOverhead + EmptyTotalDistancesToReceiversOverhead;
+	const int64 RayTracingParsingOutputPoints = RayTracingParsingInputElements * SizeOfPointForParsing + TArrayOverhead;
+	const int64 RayTracingParsingReflectedStrengths = RayTracingParsingInputElements * SizeOfFloat + TArrayOverhead;
+	const int64 RayTracingParsingHitIndexes = RayTracingParsingInputElements * SizeOfInt32 + TArrayOverhead;
+	const int64 RayTracingParsingOutputMemory = RayTracingParsingOutputPoints + RayTracingParsingReflectedStrengths + 
+	                                            RayTracingParsingHitIndexes + FSonoTraceUESubOutputStructBaseOverhead;
+	
+	OutRayTracingParsingMemoryMB = static_cast<float>(RayTracingParsingInputMemory + RayTracingParsingOutputMemory) / (1024.0f * 1024.0f);
+	
+	const int64 SpecularPointsMemory = N * FSonoTraceUEPointStructWorstCase + TArrayOverhead;
+	const int64 SpecularReflectedStrengths = N * SizeOfFloat + TArrayOverhead;
+	const int64 SpecularHitIndexes = N * SizeOfInt32 + TArrayOverhead;
+	const int64 SpecularSimulationTotalMemory = SpecularPointsMemory + SpecularReflectedStrengths + 
+	                                            SpecularHitIndexes + FSonoTraceUESubOutputStructBaseOverhead;
+	
+	OutSpecularMemoryMB = static_cast<float>(SpecularSimulationTotalMemory) / (1024.0f * 1024.0f);
+	
+	const int64 DiffractionPointsMemory = N * FSonoTraceUEPointStructWorstCase + TArrayOverhead;
+	const int64 DiffractionReflectedStrengths = N * SizeOfFloat + TArrayOverhead;
+	const int64 DiffractionHitIndexes = N * SizeOfInt32 + TArrayOverhead;
+	const int64 DiffractionSimulationTotalMemory = DiffractionPointsMemory + DiffractionReflectedStrengths + 
+	                                               DiffractionHitIndexes + FSonoTraceUESubOutputStructBaseOverhead;
+	
+	OutDiffractionMemoryMB = static_cast<float>(DiffractionSimulationTotalMemory) / (1024.0f * 1024.0f);
+	
+	OutTotalMemoryMB = OutRayTracingParsingMemoryMB + OutSpecularMemoryMB + OutDiffractionMemoryMB;
+	
+	return true;
+}
+
+bool ASonoTraceUEActor::WouldSimulationTestFitInMemory(int32 NumEmitters, int32 NumReceivers, int32 NumFrequencies, int32 NumPoints, int32 NumBounces,
+	float MemoryLimitMB, bool bTestRayTracingParsing, bool bTestSpecular, bool bTestDiffraction, float& OutEstimatedMemoryMB)
+{
+	float RayTracingParsingMemoryMB = 0.0f;
+	float SpecularMemoryMB = 0.0f;
+	float DiffractionMemoryMB = 0.0f;
+	float TotalMemoryMB = 0.0f;
+	
+	EstimateSimulationMemoryUsage(NumEmitters, NumReceivers, NumFrequencies, NumPoints, NumBounces,
+		RayTracingParsingMemoryMB, SpecularMemoryMB, DiffractionMemoryMB, TotalMemoryMB);
+	
+	OutEstimatedMemoryMB = 0.0f;
+	if (bTestRayTracingParsing)
+	{
+		OutEstimatedMemoryMB += RayTracingParsingMemoryMB;
+	}
+	if (bTestSpecular)
+	{
+		OutEstimatedMemoryMB += SpecularMemoryMB;
+	}
+	if (bTestDiffraction)
+	{
+		OutEstimatedMemoryMB += DiffractionMemoryMB;
+	}
+	
+	return OutEstimatedMemoryMB <= MemoryLimitMB;
+}
+
 float ASonoTraceUEActor::SigmoidMix(const float X, const float Slope, const float Center, const float Value1, const float Value2)
 {
 	// Compute the sigmoid value

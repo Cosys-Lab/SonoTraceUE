@@ -1253,6 +1253,14 @@ public:
 		
 	UFUNCTION(BlueprintCallable, Category = "SonoTraceUE|Debug")
 	FString DebugRunRaytracingShaderTest(bool& bOutTestStarted, const TArray<FVector>& InputEmitterPositions, int32 InputNumberOfInitialRays = 50000, int32 InputMaxBounces = 1, int32 NumberOfRuns = 1, const FString& TestDescription = TEXT("Ray Tracing Shader Test"), bool bSaveToFile = false, const FString& FilePath = TEXT(""), bool bAppendToFile = true);
+
+	UFUNCTION(BlueprintCallable, Category = "SonoTraceUE|Debug")
+	bool EstimateSimulationMemoryUsage(int32 NumEmitters, int32 NumReceivers, int32 NumFrequencies, int32 NumPoints, int32 NumBounces,
+		float& OutRayTracingParsingMemoryMB, float& OutSpecularMemoryMB, float& OutDiffractionMemoryMB, float& OutTotalMemoryMB);
+	
+	UFUNCTION(BlueprintCallable, Category = "SonoTraceUE|Debug")
+	bool WouldSimulationTestFitInMemory(int32 NumEmitters, int32 NumReceivers, int32 NumFrequencies, int32 NumPoints, int32 NumBounces,
+		float MemoryLimitMB, bool bTestRayTracingParsing, bool bTestSpecular, bool bTestDiffraction, float& OutEstimatedMemoryMB);
 		
 	
 	UFUNCTION()
