@@ -1317,8 +1317,9 @@ protected:
 	void DrawMeshDebug(const UMeshComponent* MeshComponent, FSonoTraceUEMeshDataStruct& NewMeshData) const;
 	void DebugRaytracingShaderTestTick(float DeltaTime);	
 	void RunDebugSpecularSimulation(int32 NumberOfInitialRays, int32 NumberOfSimFrequencies, int32 ActualEmitterCount, int32 ActualReceiverCount, float& OutTimeMs);
-	void RunDebugRayTracingParsing(int32 MaxBounces, int32 ActualEmitterCount, int32 ActualReceiverCount, float& OutTimeMs, int32& OutReflectionPointCount);
+	void RunDebugRayTracingParsing(int32 MaxBounces, int32 ActualEmitterCount, int32 ActualReceiverCount, float& OutTimeMs, int32& OutReflectionPointCount);	
 	void RunDebugDiffractionSimulation(int32 NumberOfInitialRays, int32 NumberOfSimFrequencies, int32 ActualEmitterCount, int32 ActualReceiverCount, float& OutTimeMs);
+	void RunDebugDiffractionSimulationNew(int32 NumberOfInitialRays, int32 NumberOfSimFrequencies, int32 ActualEmitterCount, int32 ActualReceiverCount, float& OutTimeMs);
 	FString BuildRaytracingShaderTestCsv() const;
 	void EndSimulation();
 
