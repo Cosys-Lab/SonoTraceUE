@@ -6,10 +6,14 @@
 #include "Modules/ModuleManager.h"
 #include "../Private/ScenePrivate.h"
 #include "../Private/Nanite/NaniteRayTracing.h"
+
 #if RHI_RAYTRACING
 #define NUM_THREADS_PER_GROUP_DIMENSION 8
 
 DEFINE_LOG_CATEGORY(SonoTraceUE);
+
+// GPU Stats for profiling - shows up in 'stat gpu' and profilegpu
+DECLARE_GPU_STAT_NAMED(SonoTraceRayTracing, TEXT("SonoTrace RayTracing"));
 
 class FSonoTraceRGS : public FGlobalShader
 {
@@ -391,6 +395,9 @@ void FSonoTrace::Execute_RenderThread(FPostOpaqueRenderParameters& Parameters)
 	PassParameters->OutputBuffer = GraphBuilder->CreateUAV(StructuredOutputBufferRef, PF_Unknown);
 
 	FRHIRayTracingScene* RHIScene = CachedParams.Scene->RayTracingScene.GetRHIRayTracingScene();
+	
+	// Add GPU stat scope for profiling (shows in 'stat gpu' and 'profilegpu')
+	RDG_GPU_STAT_SCOPE(*GraphBuilder, SonoTraceRayTracing);
 	
 	// Add the ray trace dispatch pass
 	GraphBuilder->AddPass(
