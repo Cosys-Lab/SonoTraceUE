@@ -1907,14 +1907,33 @@ void ASonoTraceUEActor::RunSimulation(const TArray<int32> OverrideEmitterSignalI
 			FCollisionQueryParams TraceParams(FName(TEXT("DiffractionTrace")), true);
 			TraceParams.AddIgnoredActors(IgnoreActors);
 
-			int32 NumReceivers = GeneratedSettings.FinalReceiverPositions.Num();			
+			int32 NumReceivers = GeneratedSettings.FinalReceiverPositions.Num();
+			
+			// ---------------------------------------------------------
+			// PARALLELIZED DIFFRACTION PROCESSING
+			// ---------------------------------------------------------
+			
+			// Struct to hold candidate data for parallel processing
+			struct FDiffractionCandidate
+			{
+				int32 SampleIndex;
+				int32 TriangleIndex;
+				FVector WorldPosition;
+				FVector WorldNormal;
+			};
+			
+			// STEP 1: Gather valid candidates (single-threaded with line trace filtering)
+			TArray<FDiffractionCandidate> ValidCandidates;
+			ValidCandidates.Reserve(DiffractionNormals.Num());
+			
+			UWorld* CachedWorld = GetWorld();
 			for (int32 SampleIndex = 0; SampleIndex < DiffractionNormals.Num(); ++SampleIndex)
 			{
 				bool ValidLOS = true;
 				if (InputSettings->EnableDiffractionLineOfSightRequired)
 				{								
 					FHitResult HitResult;			
-					bool bHit = GetWorld()->LineTraceSingleByChannel(
+					bool bHit = CachedWorld->LineTraceSingleByChannel(
 						HitResult,
 						SensorLocation,
 						DiffractionPositions[SampleIndex],
@@ -1924,15 +1943,11 @@ void ASonoTraceUEActor::RunSimulation(const TArray<int32> OverrideEmitterSignalI
 					if (bHit)
 						ValidLOS = false;
 				}
+				
 				if (ValidLOS)
 				{
+					// Check angle validity for at least one emitter
 					bool PointIsValidOnce = false;
-					TArray<float> VectorEmitterToDiffractionDistance;
-					TArray<bool> VectorEmitterValidAngle;
-					VectorEmitterToDiffractionDistance.Init(0, EmitterPoses.Num());
-					VectorEmitterValidAngle.Init(false, EmitterPoses.Num());
-					FVector PointLocation = DiffractionPositions[SampleIndex];
-
 					for (int32 EmitterIndex = 0; EmitterIndex < EmitterPoses.Num(); ++EmitterIndex)
 					{
 						float DotProduct = FVector::DotProduct(DiffractionNormals[SampleIndex], VectorEmitterToDiffractionNormed[EmitterIndex][SampleIndex]);
@@ -1941,82 +1956,155 @@ void ASonoTraceUEActor::RunSimulation(const TArray<int32> OverrideEmitterSignalI
 						if (Angle > 90 && Angle < 270)
 						{
 							PointIsValidOnce = true;
+							break;
+						}
+					}
+					
+					if (PointIsValidOnce)
+					{
+						FDiffractionCandidate Cand;
+						Cand.SampleIndex = SampleIndex;
+						Cand.TriangleIndex = DiffractionTriangleIndexes[SampleIndex];
+						Cand.WorldPosition = DiffractionPositions[SampleIndex];
+						Cand.WorldNormal = DiffractionNormals[SampleIndex];
+						ValidCandidates.Add(Cand);
+					}
+				}
+			}
+			
+			// STEP 2: Process valid candidates in parallel
+			if (ValidCandidates.Num() > 0)
+			{
+				// Pre-allocate output arrays to worst case size
+				TArray<FSonoTraceUEPointStruct> TempResults;
+				TempResults.SetNum(ValidCandidates.Num());
+				
+				TArray<float> TempStrengths;
+				TempStrengths.SetNum(ValidCandidates.Num());
+				
+				// Atomic counter for thread-safe indexing
+				volatile int32 ValidPointCount = 0;
+				
+				// Cache read-only data for thread safety
+				const int32 CachedNumEmitters = EmitterPoses.Num();
+				const int32 CachedNumReceivers = NumReceivers;
+				const int32 CachedNumFrequencies = InputSettings->NumberOfSimFrequencies;
+				const float CachedMinStrength = InputSettings->DiffractionMinimumStrength;
+				const bool CachedPointsInSensorFrame = InputSettings->PointsInSensorFrame;
+				const int32 CachedHitObjectType = HitObjectTypes[HitIndex];
+				const FName CachedHitObjectLabel = HitObjectLabels[HitIndex];
+				const TArray<float>& CachedFrequencies = GeneratedSettings.Frequencies;
+				const TArray<float>& CachedMaterialStrengthsDiffraction = GeneratedSettings.ObjectSettings[CachedHitObjectType].MaterialStrengthsDiffraction;
+				
+				ParallelFor(ValidCandidates.Num(), [&](int32 Idx)
+				{
+					const FDiffractionCandidate& Cand = ValidCandidates[Idx];
+					const FVector& PointLocation = Cand.WorldPosition;
+					const int32 TriangleIndex = Cand.TriangleIndex;
+					
+					// Calculate emitter distances and angle validity
+					TArray<float> VectorEmitterToDiffractionDistance;
+					TArray<bool> VectorEmitterValidAngle;
+					VectorEmitterToDiffractionDistance.Init(0, CachedNumEmitters);
+					VectorEmitterValidAngle.Init(false, CachedNumEmitters);
+					
+					for (int32 EmitterIndex = 0; EmitterIndex < CachedNumEmitters; ++EmitterIndex)
+					{
+						float DotProduct = FVector::DotProduct(DiffractionNormals[Cand.SampleIndex], VectorEmitterToDiffractionNormed[EmitterIndex][Cand.SampleIndex]);
+						DotProduct = FMath::Clamp(DotProduct, -1.0f, 1.0f);
+						float Angle = FMath::RadiansToDegrees(FMath::Acos(DotProduct));
+						if (Angle > 90 && Angle < 270)
+						{
 							VectorEmitterValidAngle[EmitterIndex] = true;
 							VectorEmitterToDiffractionDistance[EmitterIndex] = FVector::Dist(PointLocation, EmitterPoses[EmitterIndex].GetLocation());
 						}
 					}
-					if (PointIsValidOnce)
-					{						
-						float DistancePointToSensor = FVector::Dist(PointLocation, SensorLocation);
-						int32 TriangleIndex = DiffractionTriangleIndexes[SampleIndex];
-
-						FSonoTraceUEPointStruct NewPoint;
-						NewPoint.TotalDistancesToReceivers.Init(TArray<float>(), EmitterPoses.Num());
-						NewPoint.Strengths.SetNum(EmitterPoses.Num());
-
-						float SummedStrength = 0.0f;
-						for (int32 EmitterIndex = 0; EmitterIndex < EmitterPoses.Num(); ++EmitterIndex)
+					
+					float DistancePointToSensor = FVector::Dist(PointLocation, SensorLocation);
+					
+					FSonoTraceUEPointStruct NewPoint;
+					NewPoint.TotalDistancesToReceivers.Init(TArray<float>(), CachedNumEmitters);
+					NewPoint.Strengths.SetNum(CachedNumEmitters);
+					
+					float SummedStrength = 0.0f;
+					for (int32 EmitterIndex = 0; EmitterIndex < CachedNumEmitters; ++EmitterIndex)
+					{
+						NewPoint.Strengths[EmitterIndex].Init(TArray<float>(), CachedNumReceivers);
+						NewPoint.TotalDistancesToReceivers[EmitterIndex].Init(0, CachedNumReceivers);
+						for (int32 ReceiverIndex = 0; ReceiverIndex < CachedNumReceivers; ++ReceiverIndex)
 						{
-							NewPoint.Strengths[EmitterIndex].Init(TArray<float>(), ReceiverPoses.Num());
-							NewPoint.TotalDistancesToReceivers[EmitterIndex].Init(0, ReceiverPoses.Num());
-							for (int32 ReceiverIndex = 0; ReceiverIndex < NumReceivers; ++ReceiverIndex)
+							NewPoint.Strengths[EmitterIndex][ReceiverIndex].Init(0, CachedNumFrequencies);
+							for (int32 FreqIndex = 0; FreqIndex < CachedNumFrequencies; ++FreqIndex)
 							{
-								NewPoint.Strengths[EmitterIndex][ReceiverIndex].Init(0, InputSettings->NumberOfSimFrequencies);
-								for (int32 FreqIndex = 0; FreqIndex < InputSettings->NumberOfSimFrequencies; ++FreqIndex)
-								{
-									FVector ReceiverLocation = ReceiverPoses[ReceiverIndex].GetLocation();
-									float DistanceEmitterToPoint = (EmitterPoses[EmitterIndex].GetLocation() - PointLocation).Size();
-									float DistanceMicToPoint = (ReceiverLocation - PointLocation).Size();
-									float FullDistance = DistanceEmitterToPoint + DistanceMicToPoint;
-									NewPoint.TotalDistancesToReceivers[EmitterIndex][ReceiverIndex] = FullDistance;
-									float FullDistanceMeters = FullDistance / 100.0f;
-									float PathLossDiff = 1.0f / FMath::Square(FullDistanceMeters);			        			
-									float AlphaAbsorption = 0.038f * (GeneratedSettings.Frequencies[FreqIndex] / 1000.0f) - 0.3f;
-									float PathLossAbsorption = FMath::Pow(10.0f, -(AlphaAbsorption * FullDistanceMeters) / 20.0f);			        			
-									float Strength = GeneratedSettings.ObjectSettings[HitObjectTypes[HitIndex]].MaterialStrengthsDiffraction[FreqIndex] *
-													 PathLossDiff * PathLossAbsorption;
-									NewPoint.Strengths[EmitterIndex][ReceiverIndex][FreqIndex] = Strength;						  
-									SummedStrength += Strength * Strength;
-								}
+								FVector ReceiverLocation = ReceiverPoses[ReceiverIndex].GetLocation();
+								float DistanceEmitterToPoint = (EmitterPoses[EmitterIndex].GetLocation() - PointLocation).Size();
+								float DistanceMicToPoint = (ReceiverLocation - PointLocation).Size();
+								float FullDistance = DistanceEmitterToPoint + DistanceMicToPoint;
+								NewPoint.TotalDistancesToReceivers[EmitterIndex][ReceiverIndex] = FullDistance;
+								float FullDistanceMeters = FullDistance / 100.0f;
+								float PathLossDiff = 1.0f / FMath::Square(FullDistanceMeters);
+								float AlphaAbsorption = 0.038f * (CachedFrequencies[FreqIndex] / 1000.0f) - 0.3f;
+								float PathLossAbsorption = FMath::Pow(10.0f, -(AlphaAbsorption * FullDistanceMeters) / 20.0f);
+								float Strength = CachedMaterialStrengthsDiffraction[FreqIndex] * PathLossDiff * PathLossAbsorption;
+								NewPoint.Strengths[EmitterIndex][ReceiverIndex][FreqIndex] = Strength;
+								SummedStrength += Strength * Strength;
 							}
 						}
-						SummedStrength = SummedStrength / NumReceivers / EmitterPoses.Num() / InputSettings->NumberOfSimFrequencies;
-						if (SummedStrength > InputSettings->DiffractionMinimumStrength)
-						{
-							NewPoint.Location = PointLocation;
-							NewPoint.ReflectionDirection = VectorEmitterToDiffractionNormed[0][SampleIndex];
-							NewPoint.Label = HitObjectLabels[HitIndex];
-							NewPoint.Index = SampleIndex;
-							NewPoint.SummedStrength = SummedStrength;
-							NewPoint.TotalDistance = DistancePointToSensor;
-							NewPoint.TotalDistancesFromEmitters = VectorEmitterToDiffractionDistance;
-							NewPoint.DistanceToSensor = DistancePointToSensor;
-							NewPoint.ObjectTypeIndex = HitObjectTypes[HitIndex];
-							NewPoint.IsHit = true;
-							NewPoint.IsLastHit = true;
-							NewPoint.CurvatureMagnitude = CurrentMeshData->TriangleCurvatureMagnitude[TriangleIndex];	
-							NewPoint.SurfaceBRDF = &CurrentMeshData->TriangleBRDF[TriangleIndex];
-							NewPoint.SurfaceMaterial = &CurrentMeshData->TriangleMaterial[TriangleIndex];
-							NewPoint.IsSpecular = false;
-							NewPoint.IsDiffraction = true;
-						
-							if (InputSettings->PointsInSensorFrame)
-							{    
-								NewPoint.Location = WorldToSensorTransform.TransformPosition(NewPoint.Location);
-								NewPoint.ReflectionDirection = WorldToSensorTransform.TransformVector(NewPoint.ReflectionDirection);
-							}
-						
-							DiffractionSubOutput.ReflectedPoints.Add(NewPoint);
-							DiffractionSubOutput.ReflectedStrengths.Add(SummedStrength);
-							if (NewPoint.SummedStrength > DiffractionSubOutput.MaximumStrength)
-								DiffractionSubOutput.MaximumStrength = SummedStrength;
-							if (NewPoint.CurvatureMagnitude > DiffractionSubOutput.MaximumCurvature)
-								DiffractionSubOutput.MaximumCurvature = NewPoint.CurvatureMagnitude;
-							if (NewPoint.TotalDistance > DiffractionSubOutput.MaximumTotalDistance)
-								DiffractionSubOutput.MaximumTotalDistance = NewPoint.TotalDistance;
-						}		
 					}
-				}			
+					SummedStrength = SummedStrength / CachedNumReceivers / CachedNumEmitters / CachedNumFrequencies;
+					
+					if (SummedStrength > CachedMinStrength)
+					{
+						NewPoint.Location = PointLocation;
+						NewPoint.ReflectionDirection = VectorEmitterToDiffractionNormed[0][Cand.SampleIndex];
+						NewPoint.Label = CachedHitObjectLabel;
+						NewPoint.Index = Cand.SampleIndex;
+						NewPoint.SummedStrength = SummedStrength;
+						NewPoint.TotalDistance = DistancePointToSensor;
+						NewPoint.TotalDistancesFromEmitters = MoveTemp(VectorEmitterToDiffractionDistance);
+						NewPoint.DistanceToSensor = DistancePointToSensor;
+						NewPoint.ObjectTypeIndex = CachedHitObjectType;
+						NewPoint.IsHit = true;
+						NewPoint.IsLastHit = true;
+						NewPoint.CurvatureMagnitude = CurrentMeshData->TriangleCurvatureMagnitude[TriangleIndex];
+						NewPoint.SurfaceBRDF = &CurrentMeshData->TriangleBRDF[TriangleIndex];
+						NewPoint.SurfaceMaterial = &CurrentMeshData->TriangleMaterial[TriangleIndex];
+						NewPoint.IsSpecular = false;
+						NewPoint.IsDiffraction = true;
+						
+						if (CachedPointsInSensorFrame)
+						{
+							NewPoint.Location = WorldToSensorTransform.TransformPosition(NewPoint.Location);
+							NewPoint.ReflectionDirection = WorldToSensorTransform.TransformVector(NewPoint.ReflectionDirection);
+						}
+						
+						// Thread-safe add using atomic counter
+						int32 WriteIndex = FPlatformAtomics::InterlockedIncrement(&ValidPointCount) - 1;
+						TempResults[WriteIndex] = MoveTemp(NewPoint);
+						TempStrengths[WriteIndex] = SummedStrength;
+					}
+				});
+				
+				// STEP 3: Finalize - shrink arrays and calculate max stats
+				TempResults.SetNum(ValidPointCount);
+				TempStrengths.SetNum(ValidPointCount);
+				
+				// Add results to output (single-threaded)
+				for (int32 i = 0; i < ValidPointCount; ++i)
+				{
+					FSonoTraceUEPointStruct& Point = TempResults[i];
+					float PointStrength = TempStrengths[i];
+					
+					DiffractionSubOutput.ReflectedPoints.Add(MoveTemp(Point));
+					DiffractionSubOutput.ReflectedStrengths.Add(PointStrength);
+					
+					if (PointStrength > DiffractionSubOutput.MaximumStrength)
+						DiffractionSubOutput.MaximumStrength = PointStrength;
+					if (TempResults[i].CurvatureMagnitude > DiffractionSubOutput.MaximumCurvature)
+						DiffractionSubOutput.MaximumCurvature = TempResults[i].CurvatureMagnitude;
+					if (TempResults[i].TotalDistance > DiffractionSubOutput.MaximumTotalDistance)
+						DiffractionSubOutput.MaximumTotalDistance = TempResults[i].TotalDistance;
+				}
 			}
 		}
 		if (InputSettings->EnableSimulationSubOutput)
@@ -4007,8 +4095,8 @@ FString ASonoTraceUEActor::DebugRunSimulationTest(bool testRayTracingParcing, bo
 		
 		if (testDiffractionSimulation)
 		{		
-			RunDebugDiffractionSimulation(InputNumberOfInitialRays, InputNumberOfSimFrequencies, ActualEmitterCount, ActualReceiverCount, DiffractionSimulationTimeMs);
-			UE_LOG(SonoTraceUE, Log, TEXT("Old Diffraction simulation completed in %.3f ms"), DiffractionSimulationTimeMs);
+			// RunDebugDiffractionSimulation(InputNumberOfInitialRays, InputNumberOfSimFrequencies, ActualEmitterCount, ActualReceiverCount, DiffractionSimulationTimeMs);
+			// UE_LOG(SonoTraceUE, Log, TEXT("Old Diffraction simulation completed in %.3f ms"), DiffractionSimulationTimeMs);
 			RunDebugDiffractionSimulationNew(InputNumberOfInitialRays, InputNumberOfSimFrequencies, ActualEmitterCount, ActualReceiverCount, DiffractionSimulationTimeMs);
 			UE_LOG(SonoTraceUE, Log, TEXT("New Diffraction simulation completed in %.3f ms"), DiffractionSimulationTimeMs);
 		}
