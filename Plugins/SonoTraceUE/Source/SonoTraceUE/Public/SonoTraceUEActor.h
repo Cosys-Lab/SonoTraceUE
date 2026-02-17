@@ -155,6 +155,21 @@ enum class ESonoTraceUESimulationDrawSizeModeEnum : uint8
 };
 
 UENUM(BlueprintType)
+enum class ESonoTraceUEDebugTestType : uint8
+{
+	OfflineMeshPreprocessing UMETA(DisplayName = "Offline Mesh Preprocessing"),
+	RayTracingShader UMETA(DisplayName = "RayTracing Shader"),
+	SimulationComponents UMETA(DisplayName = "Simulation Components"),
+};
+
+UENUM(BlueprintType)
+enum class ESonoTraceUESimulationDrawDirectPointModeEnum : uint8
+{
+	LOS UMETA(DisplayName = "LOS"),
+	Strength UMETA(DisplayName = "Strength"),
+};
+
+UENUM(BlueprintType)
 enum class ESonoTraceUESimulationDrawColorModeEnum : uint8
 {
 	Static UMETA(DisplayName = "Static"),
@@ -501,9 +516,13 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE|Draw")
 	bool EnableDrawAllReceivers = false;
 
-	// Draw a green or red point on each receiver, depending on if there is LOS for the direct path component calculation
+	// Draw a point for each receiver
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE|Draw")
-	bool EnableDrawDirectPathLOS = false;
+	bool EnableDrawDirectPathPoints = false;
+	
+	// If drawing of direct path points is enabled, choose between displaying their strength or LOS mode (green=LOS, red=no LOS).
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE|Draw")
+	ESonoTraceUESimulationDrawDirectPointModeEnum DrawDirectPathPointsMode = ESonoTraceUESimulationDrawDirectPointModeEnum::LOS;
 
 	// Draws the points for all the components combined
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE|Draw")
@@ -557,13 +576,21 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE|Draw|Details")
 	float DrawPointsCurvatureMaximumValue = 1;
 
-	// The maximum value in centimeters to normalize the data when in strength mode for size or color when not auto-scaling
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE|Draw|Details", meta=(Units="Centimeters"))
+	// The maximum value  to normalize the data when in strength mode for size or color when not auto-scaling
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE|Draw|Details")
 	float DrawPointsStrengthMaximumValue = 5;
 	
 	// The emitter index to use for plotting the emitter directivity  when in directivity mode for size or color
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE|Draw|Details")
 	int DrawPointsDirectivityEmitterIndex = 0;
+	
+	// If drawing of direct path points is enabled, choose which emitter is chosen to show the strength off
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE|Draw|Details")
+	int DrawDirectPathPointStrengthEmitterIndex = 0;
+	
+	// If drawing of direct path points is enabled, choose which frequency is chosen to show the strength off
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE|Draw|Details")
+	int DrawDirectPathPointStrengthFrequencyIndex = 0;
 	
 	// DEBUG SETTINGS
 
@@ -680,6 +707,10 @@ public:
 	// The frequency bin index to use for the data for when in reflection strength mode for mesh data
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE|Debug")
 	int32 DrawDebugMeshReflectionStrengthFrequencyIndex = 1;
+	
+	// Disable entire initalization of the simulation. This can be used for certain debug tests
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE|Debug")
+	bool DebugDisableInitialization = false;
 };
 
 USTRUCT(BlueprintType)
@@ -1089,7 +1120,7 @@ public:
 	*/
 	UFUNCTION(BlueprintCallable, Category = "SonoTraceUE")
 	int32 GetEmitterSignalCount() const;
-
+	
 	/**
 	* Add an Actor to the SonoTraceUE mesh analysis system. Individual child components will be automatically parsed.
 	* If this contains any new mesh resource that is the first instance in the scene, it will load and parse this mesh data.
@@ -1213,7 +1244,25 @@ public:
 	*/
 	UFUNCTION(BlueprintCallable, Category = "SonoTraceUE")
 	bool SetNewSensorOwnerWorldTransform(const FVector& NewOwnerTranslation, const FRotator& NewOwnerRotator, const ETeleportType Teleport = ETeleportType::None);
+	
+	UFUNCTION(BlueprintCallable, Category = "SonoTraceUE|Debug")
+	FString DebugRunMeshPreprocessingTest(int32 NumberOfTriangles = 10000, int32 NumberOfFrequencies = 0, const FString& TestDescription = TEXT("Mesh Preprocessing Test"), bool bSaveToFile = false, const FString& FilePath = TEXT(""), bool bAppendToFile = true);
 
+	UFUNCTION(BlueprintCallable, Category = "SonoTraceUE|Debug")
+	FString DebugRunSimulationTest(bool testRayTracingParcing, bool testSpecularSimulation, bool testDiffractionSimulation, const TArray<FVector>& InputEmitterPositions, const TArray<FVector>& InputReceiverPositions, int32 InputNumberOfInitialRays = 50000, int32 InputMaxBounces = 1, int32 InputNumberOfSimFrequencies = 14, int32 NumberOfRuns = 1, const FString& TestDescription = TEXT("Simulation Test"), bool bSaveToFile = false, const FString& FilePath = TEXT(""), bool bAppendToFile = true);
+		
+	UFUNCTION(BlueprintCallable, Category = "SonoTraceUE|Debug")
+	FString DebugRunRaytracingShaderTest(bool& bOutTestStarted, const TArray<FVector>& InputEmitterPositions, int32 InputNumberOfInitialRays = 50000, int32 InputMaxBounces = 1, int32 NumberOfRuns = 1, const FString& TestDescription = TEXT("Ray Tracing Shader Test"), bool bSaveToFile = false, const FString& FilePath = TEXT(""), bool bAppendToFile = true);
+
+	UFUNCTION(BlueprintCallable, Category = "SonoTraceUE|Debug")
+	bool EstimateSimulationMemoryUsage(int32 NumEmitters, int32 NumReceivers, int32 NumFrequencies, int32 NumPoints, int32 NumBounces,
+		float& OutRayTracingParsingMemoryMB, float& OutSpecularMemoryMB, float& OutDiffractionMemoryMB, float& OutTotalMemoryMB);
+	
+	UFUNCTION(BlueprintCallable, Category = "SonoTraceUE|Debug")
+	bool WouldSimulationTestFitInMemory(int32 NumEmitters, int32 NumReceivers, int32 NumFrequencies, int32 NumPoints, int32 NumBounces,
+		float MemoryLimitMB, bool bTestRayTracingParsing, bool bTestSpecular, bool bTestDiffraction, float& OutEstimatedMemoryMB, float& OutTotalEstimatedMemoryMB);
+		
+	
 	UFUNCTION()
 	void InterfaceOnConnect(const UObjectDelivererProtocol* ClientSocket);
 
@@ -1224,7 +1273,7 @@ public:
 	void InterfaceOnReceive(const UObjectDelivererProtocol* ClientSocket, const TArray<uint8>& Buffer);
 
 	UFUNCTION()
-	void InterfaceOnReceiveString(const FString& ReceivedString, const UObjectDelivererProtocol* FromObject);
+	void InterfaceOnReceiveString(const FString& ReceivedString, const UObjectDelivererProtocol* FromObject);	
 
 	// When this is true, the EnableSimulation variable overrides the Input Settings Data Table mode
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE|Input")
@@ -1274,6 +1323,13 @@ protected:
 	void DrawSimulationResult();
 	void DrawSimulationDebug();
 	void DrawMeshDebug(const UMeshComponent* MeshComponent, FSonoTraceUEMeshDataStruct& NewMeshData) const;
+	void DebugRaytracingShaderTestTick(float DeltaTime);	
+	void RunDebugSpecularSimulation(int32 NumberOfInitialRays, int32 NumberOfSimFrequencies, int32 ActualEmitterCount, int32 ActualReceiverCount, float& OutTimeMs);
+	void RunDebugRayTracingParsing(int32 MaxBounces, int32 ActualEmitterCount, int32 ActualReceiverCount, float& OutTimeMs, int32& OutReflectionPointCount);	
+	void RunDebugDiffractionSimulation(int32 NumberOfInitialRays, int32 NumberOfSimFrequencies, int32 ActualEmitterCount, int32 ActualReceiverCount, float& OutTimeMs);
+	void RunDebugDiffractionSimulationNew(int32 NumberOfInitialRays, int32 NumberOfSimFrequencies, int32 ActualEmitterCount, int32 ActualReceiverCount, float& OutTimeMs);
+	FString BuildRaytracingShaderTestCsv() const;
+	void EndSimulation();
 
 	static void MergeEmitterPatternImpulseResponses(const int32 OriginalReceiverCount, const int32 NewReceiverCount, const int NumberOfIRSamples, TArray<TArray<float>>* ImpulseResponses);
 	static TArray<float> Interpolate(const TArray<float>& X, const TArray<float>& Y, const TArray<float>& Xq);
@@ -1297,7 +1353,9 @@ protected:
 	static TArray<uint8> SerializeObjectSettingsStruct(FSonoTraceUEObjectSettingsStruct* ObjectSettingsStruct);
 	static TArray<uint8> SerializePointStruct(FSonoTraceUEPointStruct* PointStruct);
 	static void DrawDebugNonSymmetricalFrustum(const UWorld* InWorld, const FTransform& StartTransform, const float LowerAzimuthLimit, const float UpperAzimuthLimit, const float LowerElevationLimit, const float UpperElevationLimit, const float Distance, FColor const& Color, bool bPersistentLines = false, float LifeTime=-1.f, uint8 DepthPriority = 0, float Thickness = 0.f);
-
+	static void RunSpecularComponentSimulation(FSonoTraceUESubOutputStruct* CurrentRayTracingSubOutput, const USonoTraceUEInputSettingsData* CurrentInputSettings, const FSonoTraceUEGeneratedInputStruct* CurrentGeneratedSettings,
+	                                           FTransform CurrentWorldToSensorTransform, const TArray<FTransform> CurrentEmitterPoses, TArray<FTransform> CurrentReceiverPoses);
+	
 	float TranscurredTime = 0;
 	bool Initialized = false;
 	bool AwaitingRayTracingResult = false;
@@ -1316,7 +1374,27 @@ protected:
 	double RayTracingLastLoggedTime = 0.0;        
 	int32 RayTracingExecutionCount = 0;
 
-	// Tuple of object name, mesh component, current attempts
+	bool bDebugRaytracingShaderTestActive = false;
+	int32 DebugRaytracingShaderTestCurrentRunIndex = 0;
+	int32 DebugRaytracingShaderTestNumberOfRuns = 0;
+	int32 DebugRaytracingShaderTestNumberOfInitialRays = 0;
+	int32 DebugRaytracingShaderTestMaxBounces = 0;
+	int32 DebugRaytracingShaderTestEmitterCount = 0;
+	float DebugRaytracingShaderTestGPURaytracingMemoryMB = 0.0f;
+	FString DebugRaytracingShaderTestDescription;
+	FString DebugRaytracingShaderTestTimestamp;
+	bool DebugRaytracingShaderTestSaveToFile = false;
+	FString DebugRaytracingShaderTestFilePath;
+	bool DebugRaytracingShaderTestAppendToFile = true;
+	FString LastDebugRaytracingShaderTestCsv;
+	TArray<float> DebugRaytracingShaderTestRaytracingShaderTimes;
+	int32 DebugRaytracingTestState = 0;
+	double DebugRaytracingDispatchStartTime = 0.0;
+	uint64 DebugRaytracingPreviousExecutionCounter = 0;
+	FSonoTrace DebugSonoTrace;
+	FRHIGPUBufferReadback* DebugGPUReadback = nullptr;
+	bool bDebugSonoTraceInitialized = false;
+
 	TArray<TTuple<FString, UStaticMeshComponent*, int32>> StaticMeshComponentsToLoad;
 	TArray<TTuple<FString, USkeletalMeshComponent*, int32>> SkeletalMeshComponentsToLoad;
 	
@@ -1336,7 +1414,6 @@ protected:
 	UPROPERTY()
 	TMap<USkeletalMesh*, int32> SkeletalMeshCounter;
 	TMap<int32, int32> ScenePrimitiveIndexToPersistentPrimitiveIndex;
-
 	
 	TArray<FTransform> EmitterPoses;
 	TArray<FTransform> ReceiverPoses;
