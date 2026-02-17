@@ -1,12 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
-## [In Development]
+## [Released]
 
+## [3.0.0] - 2026-01-23
+- Added parallel processing to diffraction component to speed up computation time.
 - Added emitter and receiver simple directivity model support for passive/direct mode. 
 - Added visualisation for strength for direct mode next to the LOS visualisation.
-
-## [Released]
+- Added several debug functions to help with calculating computation analysis results.
 
 ## [2.0.0] - 2026-01-16
 - Added SceneCapture to Pawn and retrieved camera capture to place into DataMessage example.
