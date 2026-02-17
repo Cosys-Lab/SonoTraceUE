@@ -3,17 +3,16 @@
 An Unreal Engine 5 Plugin for in-air acoustic simulation using Hardware-Accelerated Ray Tracing, an
 Unreal Engine implementation of the original [SonoTraceLab](https://github.com/Cosys-Lab/SonoTraceLab).
 
-This branch has the plugin source code and is packaged in a sample Unreal Project with some example levels for testing the plugin. 
-See other branches that only include the plugin so you can easily checkout those branches into your own Unreal projects.
+This branch has only the plugin source code. See other branches that also include a sample project. 
 
 SonoTraceUE is a high-fidelity acoustic simulation plugin for Unreal Engine 5 that leverages hardware-accelerated ray tracing to simulate ultrasonic sensor behavior in complex 3D environments. The plugin provides physically-based acoustic propagation modeling, including specular reflection, diffraction components, and direct path transmission, making it suitable for research in robotics, autonomous systems, and acoustic sensor development. It has an API extension so it can be interfaced with from a external API client. 
 
 ## Requirements
 
-- **Unreal Engine Version**: 5.4 or higher
+- **Unreal Engine Version**: 5.4
 - **Hardware Requirements**:
   - GPU with hardware ray tracing support
-  - DirectX 12  support
+  - DirectX 12 support
 - **Operating System**: Windows for now due to DirectX 12 requirement
 
 Hardware ray tracing **must** be enabled in Unreal Engine for this plugin to function correctly:
@@ -932,10 +931,20 @@ Draws all receivers including pattern-generated ones as yellow points.
 
 ```cpp
 UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Draw")
-bool EnableDrawDirectPathLOS
+bool EnableDrawDirectPathPoints
 ```
-Draws green/red points on receivers based on direct path line-of-sight.
+Draw a point for each receiver.
 
+---
+
+```cpp
+UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Draw")
+ESonoTraceUESimulationDrawDirectPointModeEnum DrawDirectPathPointsMode
+```
+If drawing of direct path points is enabled, choose the drawing mode:
+- `LOS`: LOS mode (green=LOS, red=no LOS)
+- `Strength`: Colors by acoustic strength. The frequency bin and emitter index can be chosen within the details settings.
+- 
 ---
 
 ```cpp
@@ -1073,6 +1082,24 @@ int DrawPointsDirectivityEmitterIndex
 The emitter index to use for plotting the emitter directivity when in directivity mode for size or color.
 
 ---
+
+```cpp
+UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Draw|Details")
+int DrawDirectPathPointStrengthEmitterIndex
+```
+If drawing of direct path points is enabled, choose which emitter is chosen to show the strength off.
+
+---
+
+
+```cpp
+UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Draw|Details")
+int DrawDirectPathPointStrengthFrequencyIndex
+```
+If drawing of direct path points is enabled, choose which frequency is chosen to show the strength off.
+
+---
+
 
 #### Debug Drawing
 
