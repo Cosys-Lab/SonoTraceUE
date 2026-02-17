@@ -1260,7 +1260,7 @@ public:
 	
 	UFUNCTION(BlueprintCallable, Category = "SonoTraceUE|Debug")
 	bool WouldSimulationTestFitInMemory(int32 NumEmitters, int32 NumReceivers, int32 NumFrequencies, int32 NumPoints, int32 NumBounces,
-		float MemoryLimitMB, bool bTestRayTracingParsing, bool bTestSpecular, bool bTestDiffraction, float& OutEstimatedMemoryMB);
+		float MemoryLimitMB, bool bTestRayTracingParsing, bool bTestSpecular, bool bTestDiffraction, float& OutEstimatedMemoryMB, float& OutTotalEstimatedMemoryMB);
 		
 	
 	UFUNCTION()

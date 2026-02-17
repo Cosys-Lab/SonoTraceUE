@@ -5312,7 +5312,7 @@ bool ASonoTraceUEActor::EstimateSimulationMemoryUsage(int32 NumEmitters, int32 N
 }
 
 bool ASonoTraceUEActor::WouldSimulationTestFitInMemory(int32 NumEmitters, int32 NumReceivers, int32 NumFrequencies, int32 NumPoints, int32 NumBounces,
-	float MemoryLimitMB, bool bTestRayTracingParsing, bool bTestSpecular, bool bTestDiffraction, float& OutEstimatedMemoryMB)
+	float MemoryLimitMB, bool bTestRayTracingParsing, bool bTestSpecular, bool bTestDiffraction, float& OutEstimatedMemoryMB, float& OutTotalEstimatedMemoryMB)
 {
 	float RayTracingParsingMemoryMB = 0.0f;
 	float SpecularMemoryMB = 0.0f;
@@ -5323,19 +5323,22 @@ bool ASonoTraceUEActor::WouldSimulationTestFitInMemory(int32 NumEmitters, int32 
 		RayTracingParsingMemoryMB, SpecularMemoryMB, DiffractionMemoryMB, TotalMemoryMB);
 	
 	OutEstimatedMemoryMB = 0.0f;
+	OutTotalEstimatedMemoryMB = 0.0f;
 	if (bTestRayTracingParsing)
 	{
-		OutEstimatedMemoryMB += RayTracingParsingMemoryMB;
+		OutEstimatedMemoryMB = RayTracingParsingMemoryMB;
+		OutTotalEstimatedMemoryMB += RayTracingParsingMemoryMB;
 	}
 	if (bTestSpecular)
 	{
-		OutEstimatedMemoryMB += SpecularMemoryMB;
+		OutEstimatedMemoryMB = FMath::Max(OutEstimatedMemoryMB, SpecularMemoryMB);
+			OutTotalEstimatedMemoryMB += SpecularMemoryMB;
 	}
 	if (bTestDiffraction)
 	{
-		OutEstimatedMemoryMB += DiffractionMemoryMB;
-	}
-	
+		OutEstimatedMemoryMB = FMath::Max(OutEstimatedMemoryMB, DiffractionMemoryMB);
+		OutTotalEstimatedMemoryMB += DiffractionMemoryMB;
+	}	
 	return OutEstimatedMemoryMB <= MemoryLimitMB;
 }
 
