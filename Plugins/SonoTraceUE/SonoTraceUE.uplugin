@@ -1,7 +1,7 @@
 {
 	"FileVersion": 3,
-	"Version": 2,
-	"VersionName": "2.0.0",
+	"Version": 3,
+	"VersionName": "3.0.0",
 	"FriendlyName": "SonoTraceUE Plugin",
 	"Description": "SonoTraceUE Plugin",
 	"Category": "Other",

@@ -10,10 +10,10 @@ SonoTraceUE is a high-fidelity acoustic simulation plugin for Unreal Engine 5 th
 
 ## Requirements
 
-- **Unreal Engine Version**: 5.4 or higher
+- **Unreal Engine Version**: 5.4
 - **Hardware Requirements**:
   - GPU with hardware ray tracing support
-  - DirectX 12  support
+  - DirectX 12 support
 - **Operating System**: Windows for now due to DirectX 12 requirement
 
 Hardware ray tracing **must** be enabled in Unreal Engine for this plugin to function correctly:
@@ -40,37 +40,6 @@ You can add it directly through the Place Actors panel or through a blueprint as
 
 - **Automatic Mode**: Set `EnableRunSimulationOnlyOnTrigger` to `false` for continuous simulation at the specified rate
 - **Manual Mode**: Keep `EnableRunSimulationOnlyOnTrigger` as `true` and call `TriggerSimulation()` via Blueprint or C++ or the API.
-
-## Example levels
-
-There are 3 levels in this sample Unreal Project. They can all be found in the _/Content/SonoTraceUE/Levels_ folder.
-They all us the same _InterfaceSettings_ and _CustomObjectSettings_ to load in the [API](#api) and [objects settings](#creating-new-object-settings) respectively.
-
- 1. Default: Loaded by default in the Unreal Editor. Mostly tests different mesh types and uses an _active_ sensor controlled by the user input.
- 2. Passive: as the name says, it uses only direct mode to sense passive with a moving source and a static receiver array.
- 3. Test: a simple scene with some objects types, no simulation is performed. Only to show the curvature calculation for certain object types and how they are made. 
-
-### 1. Default
-In this mode the `SonoTraceUEActor` is attached to the player `UPawn`. It is using the _ActiveInputSettings_ as found in the _/Content/SonoTraceUE/_ folder. The environement is filled with objects of different types (static, skeletal, landscape, with/without nanite,etc.) for testing purposes. There are also a few custom blueprints that dynamicly spawn and move objects. 
-
-When pressing play, the user can test a of the functions of the `SonoTraceUEActor` class. For the source code, check the Event Graph of _/Content/SonoTraceUE/Blueprints/SonoTraceUEPawn_.
- - Pressing Y toggles the measurement triggers through mouse clicking
- - Pressing the left mouse button triggers a measurement with the default active emitter
- - Pressing the right mouse button triggers a measurement with the override emitter index
- - Use + & - on the numpad to control the override active emitter index
- - Use / & * on the numpad to control the default active emitter index
- - Pressing U will change the sensor's relative transform with a small fixed offset
- - Pressing I will change the sensor's world transform with a small fixed offset
- - Pressing O will change the sensor's owner (the Pawn) transform with a small fixed offset
-
-### 2. Passive
-In this mode the `SonoTraceUEActor` is a component of a blueprint actor in the world, see the Event Graph in the _/Content/SonoTraceUE/Blueprints/PassiveStaticSonoTraceUEObject_ blueprint. It is using the _PassiveInputSettings_ as found in the _/Content/SonoTraceUE/_ folder. 
-
-In this environment, a static receiver array is laying on the ground surface. An emitter source is constantly moving at a fixed rate between a left and right limit next to the cone (which blocks the line of sight between receivers and emitter). In this mode only direct path simulation is done. 
-Additional blueprint code makes one single receiver also move up and down to show this blueprint functionality as well.
-
-### 3. Test
-In this mode the `SonoTraceUEActor` is directly placed in the world. It is using the _TestInputSettings_ as found in the _/Content/SonoTraceUE/_ folder. The simulation is disabled as this environment is mostly to show the curvature calculation with the debug visualisation of different mesh objects. It shows the limitations of the curvature calculation for very simplistic low resolution meshes compared to more custom-made meshes with more definition near edges. 
 
 ## Usage Tips
 
@@ -106,11 +75,11 @@ For the receiver, the calculation occurs upon arrival, dampening reflections tha
 
 ### Creating new emitter signals
 
-Emitter signals are defined as `FloatCurve` objects. You can load them in from CSV files. To do so, drag in a CSV file into the content browser and choose the `FloatCurve` class. An example CSV file can be found [here](/TestData/EmitterSignal_Generated_eRTIS_Sweep_25_80.csv).
+Emitter signals are defined as `FloatCurve` objects. You can load them in from CSV files. To do so, drag in a CSV file into the content browser and choose the `FloatCurve` class. 
 
 ### Creating new emitter and receiver array coordinate tables
 
-To easily load in coordinates one can use our custom `DataTable` structure called `SonoTraceUECoordinateTable`. You can load them in from CSV files. To do so, drag in a CSV file into the content browser and choose the **DataTable** class and set the row type to `SonoTraceUECoordinateTable`. An example CSV file can be found [here](/TestData/ReceiverCoordinates_eRTIS_v3D1.csv).
+To easily load in coordinates one can use our custom `DataTable` structure called `SonoTraceUECoordinateTable`. You can load them in from CSV files. To do so, drag in a CSV file into the content browser and choose the **DataTable** class and set the row type to `SonoTraceUECoordinateTable`. 
 
 ### Creating new object settings
 
@@ -963,10 +932,20 @@ Draws all receivers including pattern-generated ones as yellow points.
 
 ```cpp
 UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Draw")
-bool EnableDrawDirectPathLOS
+bool EnableDrawDirectPathPoints
 ```
-Draws green/red points on receivers based on direct path line-of-sight.
+Draw a point for each receiver.
 
+---
+
+```cpp
+UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Draw")
+ESonoTraceUESimulationDrawDirectPointModeEnum DrawDirectPathPointsMode
+```
+If drawing of direct path points is enabled, choose the drawing mode:
+- `LOS`: LOS mode (green=LOS, red=no LOS)
+- `Strength`: Colors by acoustic strength. The frequency bin and emitter index can be chosen within the details settings.
+- 
 ---
 
 ```cpp
@@ -1104,6 +1083,24 @@ int DrawPointsDirectivityEmitterIndex
 The emitter index to use for plotting the emitter directivity when in directivity mode for size or color.
 
 ---
+
+```cpp
+UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Draw|Details")
+int DrawDirectPathPointStrengthEmitterIndex
+```
+If drawing of direct path points is enabled, choose which emitter is chosen to show the strength off.
+
+---
+
+
+```cpp
+UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Draw|Details")
+int DrawDirectPathPointStrengthFrequencyIndex
+```
+If drawing of direct path points is enabled, choose which frequency is chosen to show the strength off.
+
+---
+
 
 #### Debug Drawing
 
