@@ -200,7 +200,20 @@ bool ASonoTraceUEActor::AddStaticMeshComponent(UStaticMeshComponent* MeshCompone
 					return false;
 				}
 				if (!StaticMeshToMeshDataIndex.Contains(StaticMesh)) // Only process unique meshes
-				{					
+				{
+					if (ObjectSettings->DisableMeshDataGeneration)
+					{
+						FName MeshName = FName(StaticMesh->GetName());
+						SkippedMeshesDueToTriangleCount.Add(MeshName, -1); 
+						UE_LOG(SonoTraceUE, Warning, TEXT("SKIPPED: StaticMesh '%s' has DisableMeshDataGeneration enabled in ObjectSettings '%s'. Mesh data will not be generated."),
+							   *StaticMesh->GetName(), *ObjectSettings->Name.ToString());
+						PersistentPrimitiveIndexToPrimitiveComponent.Add(PersistentPrimitiveIndex, MeshComponent);
+						ScenePrimitiveIndexToPersistentPrimitiveIndex.Add(ScenePrimitiveIndex, PersistentPrimitiveIndex);
+						PersistentPrimitiveIndexToLabelsAndObjectTypes.Add(PersistentPrimitiveIndex, TTuple<FName, int32>(Label, ObjectTypeIndex));
+						if (UpdateTable) UpdateScenePrimitiveIndexToPersistentPrimitiveIndexTable();
+						return true;
+					}
+					
 					if (InputSettings->MeshDataGenerationTriangleMaximum > 0)
 					{
 						const int32 TriangleCount = GetMeshComponentTriangleCount(MeshComponent);
@@ -235,11 +248,10 @@ bool ASonoTraceUEActor::AddStaticMeshComponent(UStaticMeshComponent* MeshCompone
 					const int32 CurrentCount = StaticMeshCounter.FindChecked(StaticMesh);
 					StaticMeshCounter.Add(StaticMesh, CurrentCount + 1);
 				}
-				const int32 TriangleCount = GetMeshComponentTriangleCount(MeshComponent);
 				PersistentPrimitiveIndexToPrimitiveComponent.Add(PersistentPrimitiveIndex, MeshComponent);
 				ScenePrimitiveIndexToPersistentPrimitiveIndex.Add(ScenePrimitiveIndex, PersistentPrimitiveIndex);
-				UE_LOG(SonoTraceUE, Log, TEXT("Added object with PPI #%d, SPI #%d and label '%s' using StaticMesh '%s' (%d triangles) and object type '%s (#%d)'."),
-					   PersistentPrimitiveIndex, ScenePrimitiveIndex, *Label.ToString(), *StaticMesh->GetName(), TriangleCount, *ObjectSettings->Name.ToString(), ObjectTypeIndex);
+				UE_LOG(SonoTraceUE, Log, TEXT("Added object with PPI #%d, SPI #%d and label '%s' using StaticMesh '%s' and object type '%s (#%d)'."),
+					   PersistentPrimitiveIndex, ScenePrimitiveIndex, *Label.ToString(), *StaticMesh->GetName(), *ObjectSettings->Name.ToString(), ObjectTypeIndex);
 				PersistentPrimitiveIndexToLabelsAndObjectTypes.Add(PersistentPrimitiveIndex, TTuple<FName, int32>(Label, ObjectTypeIndex));
 				if (UpdateTable) UpdateScenePrimitiveIndexToPersistentPrimitiveIndexTable();
 				return true;
@@ -290,6 +302,19 @@ bool ASonoTraceUEActor::AddSkeletalMeshComponent(USkeletalMeshComponent* MeshCom
 			    }
 			    if (!SkeletalMeshToMeshDataIndex.Contains(SkeletalMesh)) 
 			    {
+				    if (ObjectSettings->DisableMeshDataGeneration)
+				    {
+					    FName MeshName = FName(SkeletalMesh->GetName());
+					    SkippedMeshesDueToTriangleCount.Add(MeshName, -1); 
+					    UE_LOG(SonoTraceUE, Warning, TEXT("SKIPPED: SkeletalMesh '%s' has DisableMeshDataGeneration enabled in ObjectSettings '%s'. Mesh data will not be generated."),
+						       *SkeletalMesh->GetName(), *ObjectSettings->Name.ToString());
+					    PersistentPrimitiveIndexToPrimitiveComponent.Add(PersistentPrimitiveIndex, MeshComponent);
+					    ScenePrimitiveIndexToPersistentPrimitiveIndex.Add(ScenePrimitiveIndex, PersistentPrimitiveIndex);
+					    PersistentPrimitiveIndexToLabelsAndObjectTypes.Add(PersistentPrimitiveIndex, TTuple<FName, int32>(Label, ObjectTypeIndex));
+					    if (UpdateTable) UpdateScenePrimitiveIndexToPersistentPrimitiveIndexTable();
+					    return true;
+				    }
+				    
 				    if (InputSettings->MeshDataGenerationTriangleMaximum > 0)
 				    {
 					    const int32 TriangleCount = GetMeshComponentTriangleCount(MeshComponent);
@@ -322,10 +347,9 @@ bool ASonoTraceUEActor::AddSkeletalMeshComponent(USkeletalMeshComponent* MeshCom
 				    const int32 CurrentCount = SkeletalMeshCounter.FindChecked(SkeletalMesh);
 				    SkeletalMeshCounter.Add(SkeletalMesh, CurrentCount + 1);
 			    }
-    			const int32 TriangleCount = GetMeshComponentTriangleCount(MeshComponent);
 			    PersistentPrimitiveIndexToPrimitiveComponent.Add(PersistentPrimitiveIndex, MeshComponent);
-			    UE_LOG(SonoTraceUE, Log, TEXT("Added object with PPI #%d, SPI #%d and label '%s' using SkeletalMesh '%s'(%d triangles) and object type '%s (#%d)'."),
-			           PersistentPrimitiveIndex, ScenePrimitiveIndex, *Label.ToString(), *SkeletalMesh->GetName(), TriangleCount, *ObjectSettings->Name.ToString(), ObjectTypeIndex);
+			    UE_LOG(SonoTraceUE, Log, TEXT("Added object with PPI #%d, SPI #%d and label '%s' using SkeletalMesh '%s' and object type '%s (#%d)'."),
+			           PersistentPrimitiveIndex, ScenePrimitiveIndex, *Label.ToString(), *SkeletalMesh->GetName(), *ObjectSettings->Name.ToString(), ObjectTypeIndex);
 			    PersistentPrimitiveIndexToLabelsAndObjectTypes.Add(PersistentPrimitiveIndex, TTuple<FName, int32>(Label, ObjectTypeIndex));
 			    if (UpdateTable) UpdateScenePrimitiveIndexToPersistentPrimitiveIndexTable();
 			    return true;
@@ -5459,36 +5483,6 @@ int32 ASonoTraceUEActor::GetMeshComponentTriangleCount(UMeshComponent* MeshCompo
 		return -1;
 	}
 	
-	if (UStaticMeshComponent* StaticMeshComp = Cast<UStaticMeshComponent>(MeshComponent))
-	{
-		UStaticMesh* StaticMesh = StaticMeshComp->GetStaticMesh();
-		if (StaticMesh && StaticMesh->GetRenderData())
-		{
-			const FStaticMeshLODResources& LODResources = StaticMesh->GetRenderData()->LODResources[0]; // LOD 0
-			return LODResources.GetNumTriangles();
-		}
-	}
-	
-	if (USkeletalMeshComponent* SkeletalMeshComp = Cast<USkeletalMeshComponent>(MeshComponent))
-	{
-		USkeletalMesh* SkeletalMesh = SkeletalMeshComp->GetSkeletalMeshAsset();
-		if (SkeletalMesh)
-		{
-			const FSkeletalMeshRenderData* RenderData = SkeletalMesh->GetResourceForRendering();
-			if (RenderData && RenderData->LODRenderData.Num() > 0)
-			{
-				int32 TotalTriangles = 0;
-				const FSkeletalMeshLODRenderData& LODData = RenderData->LODRenderData[0]; // LOD 0
-				for (const FSkelMeshRenderSection& Section : LODData.RenderSections)
-				{
-					TotalTriangles += Section.NumTriangles;
-				}
-				return TotalTriangles;
-			}
-		}
-	}
-	
-	
 	UDynamicMesh* DynamicMesh = NewObject<UDynamicMesh>();
 	
 	static FGeometryScriptCopyMeshFromComponentOptions Options;
@@ -5839,6 +5833,7 @@ TArray<FSonoTraceUEObjectSettingsStruct>  ASonoTraceUEActor::PopulateObjectSetti
 				CurrentNewObjectSetting.Name = RowName;
 				CurrentNewObjectSetting.Description = Row->Description;
 				CurrentNewObjectSetting.DrawDebugFirstOccurrence = Row->DrawDebugFirstOccurrence;
+				CurrentNewObjectSetting.DisableMeshDataGeneration = Row->DisableMeshDataGeneration;
 				if (UStaticMesh* StaticMesh = Cast<UStaticMesh>(Row->Asset))
 				{
 					CurrentNewObjectSetting.StaticMesh = StaticMesh;

@@ -66,6 +66,7 @@ struct SONOTRACEUE_API FSonoTraceUEObjectSettingsStruct
 	USkeletalMesh* SkeletalMesh = nullptr;
 	FString Description;
 	bool DrawDebugFirstOccurrence = false;
+	bool DisableMeshDataGeneration = false;
 	
 	// BRDF SETTINGS
 	float BrdfTransitionPosition = 0;
@@ -145,6 +146,9 @@ struct SONOTRACEUE_API FSonoTraceUEObjectSettingsTable : public FTableRowBase
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE")
 	bool DrawDebugFirstOccurrence = false;
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE")
+	bool DisableMeshDataGeneration = false;
 };
 
 UENUM(BlueprintType)
