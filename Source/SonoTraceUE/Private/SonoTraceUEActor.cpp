@@ -21,6 +21,7 @@
 #include "GeometryScript/SceneUtilityFunctions.h"
 #include "MeshCurvature.h"
 #include "Kismet/KismetSystemLibrary.h"
+#include "Rendering/SkeletalMeshRenderData.h"
 
 // Sets default values
 ASonoTraceUEActor::ASonoTraceUEActor()
@@ -5056,10 +5057,6 @@ void ASonoTraceUEActor::RunDebugDiffractionSimulationNew(int32 NumberOfInitialRa
 
 	const double DiffractionStartTime = FPlatformTime::Seconds();
 
-	// ---------------------------------------------------------
-	// STEP 1: GATHER CANDIDATES (Define candidate data for parallel processing)
-	// ---------------------------------------------------------
-	// Struct to hold data for each diffraction candidate
 	struct FDiffractionCandidate
 	{
 		int32 SampleIndex;
@@ -5067,11 +5064,10 @@ void ASonoTraceUEActor::RunDebugDiffractionSimulationNew(int32 NumberOfInitialRa
 		FVector WorldNormal;
 	};
 
-	// Pre-allocate candidate array - for this test, all samples are valid candidates
+	
 	TArray<FDiffractionCandidate> AllCandidates;
 	AllCandidates.SetNum(NumberOfInitialRays);
 
-	// Populate candidates (single-threaded gathering)
 	for (int32 SampleIndex = 0; SampleIndex < NumberOfInitialRays; ++SampleIndex)
 	{
 		FDiffractionCandidate& Cand = AllCandidates[SampleIndex];
@@ -5080,45 +5076,32 @@ void ASonoTraceUEActor::RunDebugDiffractionSimulationNew(int32 NumberOfInitialRa
 		Cand.WorldNormal = FixedNormal;
 	}
 
-	// ---------------------------------------------------------
-	// STEP 2: PROCESS CANDIDATES (Parallel)
-	// ---------------------------------------------------------
-
-	// Pre-allocate OUTPUT arrays to WORST CASE size (all candidates are valid)
-	// Use SetNum (not SetNumUninitialized) to properly initialize elements to avoid crashes on assignment
 	TArray<FSonoTraceUEPointStruct> TempResults;
 	TempResults.SetNum(AllCandidates.Num());
 	
 	TArray<float> TempStrengths;
 	TempStrengths.SetNum(AllCandidates.Num());
 
-	// Atomic counter to track how many valid points were added
+
 	volatile int32 ValidPointCount = 0;
 
-	// Cache object settings pointer for thread safety (read-only access)
 	const FSonoTraceUEObjectSettingsStruct& CachedObjectSettings = GeneratedSettings.ObjectSettings[0];
 	const TArray<float>& CachedFrequencies = GeneratedSettings.Frequencies;
 	const TArray<float>& CachedMaterialStrengthsDiffraction = CachedObjectSettings.MaterialStrengthsDiffraction;
 	const TArray<float>* CachedDefaultTriangleBRDF = &CachedObjectSettings.DefaultTriangleBRDF;
 	const TArray<float>* CachedDefaultTriangleMaterial = &CachedObjectSettings.DefaultTriangleMaterial;
 
-	// Cache world pointer for line traces (thread-safe for read-only queries)
 	UWorld* CachedWorld = GetWorld();
 
-	// The Parallel Loop
 	ParallelFor(AllCandidates.Num(), [&](int32 Idx)
 	{
 		const FDiffractionCandidate& Cand = AllCandidates[Idx];
 		const FVector& PointLocation = Cand.WorldPosition;
 		const FVector& PointNormal = Cand.WorldNormal;
 
-		// --- LINE TRACE FOR LINE-OF-SIGHT CHECK (for fair test comparison) ---
-		// This simulates the line-of-sight check done in real diffraction code
-		// The result is intentionally ignored - we just want the execution cost
 		{
 			FCollisionQueryParams TraceParams(FName(TEXT("DiffractionTraceTest")), true);
 			FHitResult HitResult;
-			// Trace from sensor location to the diffraction point (same as real code)
 			CachedWorld->LineTraceSingleByChannel(
 				HitResult,
 				TestSensorLocation,
@@ -5126,10 +5109,9 @@ void ASonoTraceUEActor::RunDebugDiffractionSimulationNew(int32 NumberOfInitialRa
 				ECC_Visibility,
 				TraceParams
 			);
-			// Result ignored - just executing the trace for fair timing comparison
+			
 		}
 
-		// Calculate emitter to diffraction distances
 		TArray<float> VectorEmitterToDiffractionDistance;
 		VectorEmitterToDiffractionDistance.Init(0, ActualEmitterCount);
 
@@ -5140,7 +5122,6 @@ void ASonoTraceUEActor::RunDebugDiffractionSimulationNew(int32 NumberOfInitialRa
 
 		float DistancePointToSensor = FVector::Dist(PointLocation, TestSensorLocation);
 
-		// Build the point struct
 		FSonoTraceUEPointStruct NewPoint;
 		NewPoint.TotalDistancesToReceivers.Init(TArray<float>(), ActualEmitterCount);
 		NewPoint.Strengths.SetNum(ActualEmitterCount);
@@ -5194,24 +5175,15 @@ void ASonoTraceUEActor::RunDebugDiffractionSimulationNew(int32 NumberOfInitialRa
 		NewPoint.IsSpecular = false;
 		NewPoint.IsDiffraction = true;
 
-		// --- CRITICAL SECTION: THREAD SAFE ADD ---
-		// Increment counter atomically. Returns the NEW value.
 		int32 WriteIndex = FPlatformAtomics::InterlockedIncrement(&ValidPointCount) - 1;
 
-		// Write to the pre-allocated arrays
 		TempResults[WriteIndex] = MoveTemp(NewPoint);
 		TempStrengths[WriteIndex] = SummedStrength;
 	});
 
-	// ---------------------------------------------------------
-	// STEP 3: CLEANUP & FINALIZE
-	// ---------------------------------------------------------
-
-	// Shrink arrays to actual number of valid items found
 	TempResults.SetNum(ValidPointCount);
 	TempStrengths.SetNum(ValidPointCount);
 
-	// Build final output struct
 	FSonoTraceUESubOutputStruct TestDiffractionSubOutput;
 	TestDiffractionSubOutput.MaximumCurvature = 0.0f;
 	TestDiffractionSubOutput.MaximumStrength = 0.0f;
@@ -5219,7 +5191,6 @@ void ASonoTraceUEActor::RunDebugDiffractionSimulationNew(int32 NumberOfInitialRa
 	TestDiffractionSubOutput.ReflectedPoints = MoveTemp(TempResults);
 	TestDiffractionSubOutput.ReflectedStrengths = MoveTemp(TempStrengths);
 
-	// Calculate max stats (single-threaded loop over the reduced array)
 	for (const FSonoTraceUEPointStruct& Pt : TestDiffractionSubOutput.ReflectedPoints)
 	{
 		if (Pt.SummedStrength > TestDiffractionSubOutput.MaximumStrength)
@@ -5231,7 +5202,6 @@ void ASonoTraceUEActor::RunDebugDiffractionSimulationNew(int32 NumberOfInitialRa
 	const double DiffractionEndTime = FPlatformTime::Seconds();
 	OutTimeMs = static_cast<float>((DiffractionEndTime - DiffractionStartTime) * 1000.0);
 	
-	// Cleanup memory
 	for (FSonoTraceUEPointStruct& Point : TestDiffractionSubOutput.ReflectedPoints)
 	{
 		Point.TotalDistancesFromEmitters.Empty();
@@ -5488,6 +5458,36 @@ int32 ASonoTraceUEActor::GetMeshComponentTriangleCount(UMeshComponent* MeshCompo
 	{
 		return -1;
 	}
+	
+	if (UStaticMeshComponent* StaticMeshComp = Cast<UStaticMeshComponent>(MeshComponent))
+	{
+		UStaticMesh* StaticMesh = StaticMeshComp->GetStaticMesh();
+		if (StaticMesh && StaticMesh->GetRenderData())
+		{
+			const FStaticMeshLODResources& LODResources = StaticMesh->GetRenderData()->LODResources[0]; // LOD 0
+			return LODResources.GetNumTriangles();
+		}
+	}
+	
+	if (USkeletalMeshComponent* SkeletalMeshComp = Cast<USkeletalMeshComponent>(MeshComponent))
+	{
+		USkeletalMesh* SkeletalMesh = SkeletalMeshComp->GetSkeletalMeshAsset();
+		if (SkeletalMesh)
+		{
+			const FSkeletalMeshRenderData* RenderData = SkeletalMesh->GetResourceForRendering();
+			if (RenderData && RenderData->LODRenderData.Num() > 0)
+			{
+				int32 TotalTriangles = 0;
+				const FSkeletalMeshLODRenderData& LODData = RenderData->LODRenderData[0]; // LOD 0
+				for (const FSkelMeshRenderSection& Section : LODData.RenderSections)
+				{
+					TotalTriangles += Section.NumTriangles;
+				}
+				return TotalTriangles;
+			}
+		}
+	}
+	
 	
 	UDynamicMesh* DynamicMesh = NewObject<UDynamicMesh>();
 	
