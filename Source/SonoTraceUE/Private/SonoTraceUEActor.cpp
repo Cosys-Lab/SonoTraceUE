@@ -20,8 +20,6 @@
 #include "MeshCurvature.h"
 #include "Kismet/KismetSystemLibrary.h"
 #include "Rendering/SkeletalMeshRenderData.h"
-#include "StaticMeshAttributes.h"
-#include "MeshDescription.h"
 
 // Sets default values
 ASonoTraceUEActor::ASonoTraceUEActor()
@@ -5481,77 +5479,8 @@ int32 ASonoTraceUEActor::GetMeshComponentTriangleCount(UMeshComponent* MeshCompo
 	if (!MeshComponent)
 	{
 		return -1;
-	}
-	
-	// Try to get triangle count from StaticMesh source model (works for Nanite)
-	if (UStaticMeshComponent* StaticMeshComp = Cast<UStaticMeshComponent>(MeshComponent))
-	{
-		UStaticMesh* StaticMesh = StaticMeshComp->GetStaticMesh();
-		if (StaticMesh)
-		{
-			// For Nanite meshes, we need to check the source model, not render data
-			// GetNumSourceModels() and GetSourceModel() give access to the original mesh data
-			if (StaticMesh->GetNumSourceModels() > 0)
-			{
-				const FStaticMeshSourceModel& SourceModel = StaticMesh->GetSourceModel(0);
-				const FMeshDescription* MeshDescription = StaticMesh->GetMeshDescription(0);
-				if (MeshDescription)
-				{
-					// MeshDescription contains the original triangle count
-					return MeshDescription->Triangles().Num();
-				}
-			}
-			
-			// Fallback: Try RawMesh if MeshDescription is not available
-			// This is for older mesh formats
-			if (StaticMesh->IsSourceModelValid(0))
-			{
-				FMeshDescription TempMeshDescription;
-				FStaticMeshAttributes Attributes(TempMeshDescription);
-				Attributes.Register();
-				
-				if (StaticMesh->GetMeshDescription(0))
-				{
-					return StaticMesh->GetMeshDescription(0)->Triangles().Num();
-				}
-			}
-			
-			// Last resort fallback: use render data LOD 0 (may be inaccurate for Nanite)
-			if (StaticMesh->GetRenderData() && StaticMesh->GetRenderData()->LODResources.Num() > 0)
-			{
-				const FStaticMeshLODResources& LODResources = StaticMesh->GetRenderData()->LODResources[0];
-				UE_LOG(SonoTraceUE, Warning, TEXT("GetMeshComponentTriangleCount: Using LOD0 render data for '%s' - may be inaccurate for Nanite meshes."),
-					   *StaticMesh->GetName());
-				return LODResources.GetNumTriangles();
-			}
-		}
-	}
-	
-	// Try to get triangle count from SkeletalMesh
-	if (USkeletalMeshComponent* SkeletalMeshComp = Cast<USkeletalMeshComponent>(MeshComponent))
-	{
-		USkeletalMesh* SkeletalMesh = SkeletalMeshComp->GetSkeletalMeshAsset();
-		if (SkeletalMesh)
-		{
-			// Use render data LOD 0 for skeletal meshes
-			const FSkeletalMeshRenderData* RenderData = SkeletalMesh->GetResourceForRendering();
-			if (RenderData && RenderData->LODRenderData.Num() > 0)
-			{
-				int32 TotalTriangles = 0;
-				const FSkeletalMeshLODRenderData& LODData = RenderData->LODRenderData[0];
-				for (const FSkelMeshRenderSection& Section : LODData.RenderSections)
-				{
-					TotalTriangles += Section.NumTriangles;
-				}
-				return TotalTriangles;
-			}
-		}
-	}
-	
-	// Fallback for other mesh types: use CopyMeshFromComponent (expensive but accurate)
-	UE_LOG(SonoTraceUE, Warning, TEXT("GetMeshComponentTriangleCount: Using CopyMeshFromComponent fallback for '%s' - this is memory intensive."),
-		   *MeshComponent->GetName());
-	
+	}	
+
 	UDynamicMesh* DynamicMesh = NewObject<UDynamicMesh>();
 	
 	static FGeometryScriptCopyMeshFromComponentOptions Options;

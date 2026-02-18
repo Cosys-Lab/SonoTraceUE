@@ -60,8 +60,6 @@ public class SonoTraceUE : ModuleRules
 				"GeometryCore",
 				"GeometryFramework",
 				"GeometryScriptingCore",
-				"MeshDescription",
-				"StaticMeshDescription",
 				// ... add private dependencies that you statically link with here ...	
 			}
 		);
