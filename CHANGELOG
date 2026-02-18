@@ -1,6 +1,9 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+- Added maximum threshold to mesh triangle count to prevent long computation times and memory usage for high resolution meshes. 
+
 ## [Released]
 
 ## [3.0.0] - 2026-02-17

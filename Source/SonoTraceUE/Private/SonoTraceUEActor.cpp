@@ -199,7 +199,24 @@ bool ASonoTraceUEActor::AddStaticMeshComponent(UStaticMeshComponent* MeshCompone
 					return false;
 				}
 				if (!StaticMeshToMeshDataIndex.Contains(StaticMesh)) // Only process unique meshes
-				{
+				{					
+					if (InputSettings->MeshDataGenerationTriangleMaximum > 0)
+					{
+						const int32 TriangleCount = GetMeshComponentTriangleCount(MeshComponent);
+						if (TriangleCount > InputSettings->MeshDataGenerationTriangleMaximum)
+						{
+							FName MeshName = FName(StaticMesh->GetName());
+							SkippedMeshesDueToTriangleCount.Add(MeshName, TriangleCount);
+							UE_LOG(SonoTraceUE, Warning, TEXT("SKIPPED: StaticMesh '%s' with %d triangles exceeds the maximum set (%d). Mesh data will not be generated for this mesh."),
+								   *StaticMesh->GetName(), TriangleCount, InputSettings->MeshDataGenerationTriangleMaximum);
+							PersistentPrimitiveIndexToPrimitiveComponent.Add(PersistentPrimitiveIndex, MeshComponent);
+							ScenePrimitiveIndexToPersistentPrimitiveIndex.Add(ScenePrimitiveIndex, PersistentPrimitiveIndex);
+							PersistentPrimitiveIndexToLabelsAndObjectTypes.Add(PersistentPrimitiveIndex, TTuple<FName, int32>(Label, ObjectTypeIndex));
+							if (UpdateTable) UpdateScenePrimitiveIndexToPersistentPrimitiveIndexTable();
+							return true;
+						}
+					}
+					
 					FSonoTraceUEMeshDataStruct NewMeshData;
 					CalculateMeshCurvature(MeshComponent, NewMeshData, InputSettings->CurvatureScale, InputSettings->EnableCurvatureTriangleSizeBasedScaler,
 						InputSettings->CurvatureScalerMinimumEffect, InputSettings->CurvatureScalerMaximumEffect, InputSettings->CurvatureScalerLowerTriangleSizeThreshold, InputSettings->CurvatureScalerUpperTriangleSizeThreshold, InputSettings->DiffractionTriangleSizeThreshold);
@@ -217,10 +234,11 @@ bool ASonoTraceUEActor::AddStaticMeshComponent(UStaticMeshComponent* MeshCompone
 					const int32 CurrentCount = StaticMeshCounter.FindChecked(StaticMesh);
 					StaticMeshCounter.Add(StaticMesh, CurrentCount + 1);
 				}
+				const int32 TriangleCount = GetMeshComponentTriangleCount(MeshComponent);
 				PersistentPrimitiveIndexToPrimitiveComponent.Add(PersistentPrimitiveIndex, MeshComponent);
 				ScenePrimitiveIndexToPersistentPrimitiveIndex.Add(ScenePrimitiveIndex, PersistentPrimitiveIndex);
-				UE_LOG(SonoTraceUE, Log, TEXT("Added object with PPI #%d, SPI #%d and label '%s' using StaticMesh '%s' and object type '%s (#%d)'."),
-					   PersistentPrimitiveIndex, ScenePrimitiveIndex, *Label.ToString(), *StaticMesh->GetName(), *ObjectSettings->Name.ToString(), ObjectTypeIndex);
+				UE_LOG(SonoTraceUE, Log, TEXT("Added object with PPI #%d, SPI #%d and label '%s' using StaticMesh '%s' (%d triangles) and object type '%s (#%d)'."),
+					   PersistentPrimitiveIndex, ScenePrimitiveIndex, *Label.ToString(), *StaticMesh->GetName(), TriangleCount, *ObjectSettings->Name.ToString(), ObjectTypeIndex);
 				PersistentPrimitiveIndexToLabelsAndObjectTypes.Add(PersistentPrimitiveIndex, TTuple<FName, int32>(Label, ObjectTypeIndex));
 				if (UpdateTable) UpdateScenePrimitiveIndexToPersistentPrimitiveIndexTable();
 				return true;
@@ -271,8 +289,22 @@ bool ASonoTraceUEActor::AddSkeletalMeshComponent(USkeletalMeshComponent* MeshCom
 			    }
 			    if (!SkeletalMeshToMeshDataIndex.Contains(SkeletalMesh)) 
 			    {
+				    if (InputSettings->MeshDataGenerationTriangleMaximum > 0)
+				    {
+					    const int32 TriangleCount = GetMeshComponentTriangleCount(MeshComponent);
+					    if (TriangleCount > InputSettings->MeshDataGenerationTriangleMaximum)
+					    {
+						    FName MeshName = FName(SkeletalMesh->GetName());
+						    SkippedMeshesDueToTriangleCount.Add(MeshName, TriangleCount);
+						    UE_LOG(SonoTraceUE, Warning, TEXT("SKIPPED: SkeletalMesh '%s' with %d triangles exceeds the maximum set (%d). Mesh data will not be generated for this mesh."),
+							       *SkeletalMesh->GetName(), TriangleCount, InputSettings->MeshDataGenerationTriangleMaximum);
+						    PersistentPrimitiveIndexToPrimitiveComponent.Add(PersistentPrimitiveIndex, MeshComponent);
+						    PersistentPrimitiveIndexToLabelsAndObjectTypes.Add(PersistentPrimitiveIndex, TTuple<FName, int32>(Label, ObjectTypeIndex));
+						    if (UpdateTable) UpdateScenePrimitiveIndexToPersistentPrimitiveIndexTable();
+						    return true;
+					    }
+				    }				    
 				    FSonoTraceUEMeshDataStruct NewMeshData;
-				    // CalculateSkeletalMeshCurvature(SkeletalMesh, NewMeshData);
 			    	CalculateMeshCurvature(MeshComponent, NewMeshData, InputSettings->CurvatureScale, InputSettings->EnableCurvatureTriangleSizeBasedScaler,
 						InputSettings->CurvatureScalerMinimumEffect, InputSettings->CurvatureScalerMaximumEffect, InputSettings->CurvatureScalerLowerTriangleSizeThreshold, InputSettings->CurvatureScalerUpperTriangleSizeThreshold, InputSettings->DiffractionTriangleSizeThreshold);
 			    	GenerateBRDFAndMaterial(ObjectSettings, &NewMeshData);
@@ -289,9 +321,10 @@ bool ASonoTraceUEActor::AddSkeletalMeshComponent(USkeletalMeshComponent* MeshCom
 				    const int32 CurrentCount = SkeletalMeshCounter.FindChecked(SkeletalMesh);
 				    SkeletalMeshCounter.Add(SkeletalMesh, CurrentCount + 1);
 			    }
+    			const int32 TriangleCount = GetMeshComponentTriangleCount(MeshComponent);
 			    PersistentPrimitiveIndexToPrimitiveComponent.Add(PersistentPrimitiveIndex, MeshComponent);
-			    UE_LOG(SonoTraceUE, Log, TEXT("Added object with PPI #%d, SPI #%d and label '%s' using SkeletalMesh '%s' and object type '%s (#%d)'."),
-			           PersistentPrimitiveIndex, ScenePrimitiveIndex, *Label.ToString(), *SkeletalMesh->GetName(), *ObjectSettings->Name.ToString(), ObjectTypeIndex);
+			    UE_LOG(SonoTraceUE, Log, TEXT("Added object with PPI #%d, SPI #%d and label '%s' using SkeletalMesh '%s'(%d triangles) and object type '%s (#%d)'."),
+			           PersistentPrimitiveIndex, ScenePrimitiveIndex, *Label.ToString(), *SkeletalMesh->GetName(), TriangleCount, *ObjectSettings->Name.ToString(), ObjectTypeIndex);
 			    PersistentPrimitiveIndexToLabelsAndObjectTypes.Add(PersistentPrimitiveIndex, TTuple<FName, int32>(Label, ObjectTypeIndex));
 			    if (UpdateTable) UpdateScenePrimitiveIndexToPersistentPrimitiveIndexTable();
 			    return true;
@@ -5447,6 +5480,46 @@ void ASonoTraceUEActor::GenerateBRDFAndMaterial(const FSonoTraceUEObjectSettings
 		MeshData->ImportanceVertexOrderedBRDFValue.Add(Pair.Value);
 		MeshData->ImportanceVertexOrderedIndex.Add(Pair.Index); 
 	}
+}
+
+int32 ASonoTraceUEActor::GetMeshComponentTriangleCount(UMeshComponent* MeshComponent)
+{
+	if (!MeshComponent)
+	{
+		return -1;
+	}
+	
+	UDynamicMesh* DynamicMesh = NewObject<UDynamicMesh>();
+	
+	static FGeometryScriptCopyMeshFromComponentOptions Options;
+	Options.bWantNormals = false;  
+	Options.bWantTangents = false;
+	Options.bWantInstanceColors = false;
+	
+	FTransform DummyTransform;         
+	EGeometryScriptOutcomePins Outcome; 	
+	UGeometryScriptLibrary_SceneUtilityFunctions::CopyMeshFromComponent(
+		MeshComponent,
+		DynamicMesh,
+		Options,
+		false,        
+		DummyTransform,
+		Outcome,
+		nullptr
+	);
+	
+	if (Outcome != EGeometryScriptOutcomePins::Success)
+	{
+		return -1;		
+	}
+	
+	const FDynamicMesh3* Mesh = DynamicMesh->GetMeshPtr();
+	if (!Mesh)
+	{
+		return -1;			
+	}
+	
+	return Mesh->TriangleCount();
 }
 
 void ASonoTraceUEActor::CalculateMeshCurvature(UMeshComponent* MeshComponent, FSonoTraceUEMeshDataStruct& OutMeshData, const float CurvatureScaleFactor, const bool EnableCurvatureTriangleSizeBasedScaler,

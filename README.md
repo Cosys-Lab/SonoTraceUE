@@ -716,13 +716,25 @@ Optimization: only calculates BRDF for the final bounce of each ray.
 
 ---
 
+### Object Settings Configuration
+
 ```cpp
-UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Configuration|Simulation|General")
+UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Configuration|Simulation|Objects")
 int32 MeshDataGenerationAttempts
 ```
 Number of ticks to attempt mesh data generation before timeout (default: 5).
 
-### Object Settings Configuration
+---
+
+```cpp
+UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Configuration|Simulation|Objects")
+int32 MeshDataGenerationTriangleMaximum
+```
+Set a maximum triangle count for the generated mesh data of manually added objects.
+If the generated mesh data exceeds this count, it will be discarded to avoid performance issues. 
+Set this to 0 to disable this check. (default: 0).
+
+---
 
 ```cpp
 UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Configuration|Simulation|Objects")
