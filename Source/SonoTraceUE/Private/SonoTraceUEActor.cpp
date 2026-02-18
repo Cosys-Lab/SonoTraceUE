@@ -10,8 +10,6 @@
 #include "SonoTrace.h"
 #include "Math/UnrealMathUtility.h"
 #include <string>
-
-#include "GuidStructCustomization.h"
 #include "ObjectDeliverer/Public/Protocol/ProtocolTcpIpClient.h"
 #include "ObjectDeliverer/Public/Protocol/ProtocolTcpIpServer.h"
 #include "ObjectDeliverer/Public/PacketRule/PacketRuleSizeBody.h"
