@@ -745,12 +745,13 @@ References a DataTable with row type `FSonoTraceUEObjectSettingsTable` for per-o
 
 **FSonoTraceUEObjectSettingsTable Structure**:
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `Asset` | `UObject*` | Reference to StaticMesh or SkeletalMesh |
-| `Description` | `FString` | Human-readable description |
-| `ObjectSettings` | `FSonoTraceUEObjectSettingsOriginStruct` | Acoustic properties (see below) |
+| Field | Type | Description                                   |
+|-------|------|-----------------------------------------------|
+| `Asset` | `UObject*` | Reference to StaticMesh or SkeletalMesh       |
+| `Description` | `FString` | Human-readable description                    |
+| `ObjectSettings` | `FSonoTraceUEObjectSettingsOriginStruct` | Acoustic properties (see below)               |
 | `DrawDebugFirstOccurrence` | `bool` | Enable debug visualization for first instance |
+| `DisableMeshDataGeneration` | `bool` | Disable the mesh generation for this mesh     |
 
 ---
 
