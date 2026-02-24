@@ -3,6 +3,11 @@ All notable changes to this project will be documented in this file.
 
 ## [Released]
 
+## [3.1.0] - 2026-02-24
+- Added links to paper preprint and video. 
+- Added maximum threshold to mesh triangle count to prevent long computation times and memory usage for high resolution meshes. 
+- Added demonstrator build for the specular raytracing in large scale environment. Available for download on the releases page.
+
 ## [3.0.0] - 2026-02-17
 - Added parallel processing to diffraction component to speed up computation time.
 - Added emitter and receiver simple directivity model support for passive/direct mode. 
