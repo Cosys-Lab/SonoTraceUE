@@ -10,8 +10,6 @@
 #include "SonoTrace.h"
 #include "Math/UnrealMathUtility.h"
 #include <string>
-
-#include "GuidStructCustomization.h"
 #include "ObjectDeliverer/Public/Protocol/ProtocolTcpIpClient.h"
 #include "ObjectDeliverer/Public/Protocol/ProtocolTcpIpServer.h"
 #include "ObjectDeliverer/Public/PacketRule/PacketRuleSizeBody.h"
@@ -21,6 +19,7 @@
 #include "GeometryScript/SceneUtilityFunctions.h"
 #include "MeshCurvature.h"
 #include "Kismet/KismetSystemLibrary.h"
+#include "Rendering/SkeletalMeshRenderData.h"
 
 // Sets default values
 ASonoTraceUEActor::ASonoTraceUEActor()
@@ -200,6 +199,36 @@ bool ASonoTraceUEActor::AddStaticMeshComponent(UStaticMeshComponent* MeshCompone
 				}
 				if (!StaticMeshToMeshDataIndex.Contains(StaticMesh)) // Only process unique meshes
 				{
+					if (ObjectSettings->DisableMeshDataGeneration)
+					{
+						FName MeshName = FName(StaticMesh->GetName());
+						SkippedMeshesDueToTriangleCount.Add(MeshName, -1); 
+						UE_LOG(SonoTraceUE, Warning, TEXT("SKIPPED: StaticMesh '%s' has DisableMeshDataGeneration enabled in ObjectSettings '%s'. Mesh data will not be generated."),
+							   *StaticMesh->GetName(), *ObjectSettings->Name.ToString());
+						PersistentPrimitiveIndexToPrimitiveComponent.Add(PersistentPrimitiveIndex, MeshComponent);
+						ScenePrimitiveIndexToPersistentPrimitiveIndex.Add(ScenePrimitiveIndex, PersistentPrimitiveIndex);
+						PersistentPrimitiveIndexToLabelsAndObjectTypes.Add(PersistentPrimitiveIndex, TTuple<FName, int32>(Label, ObjectTypeIndex));
+						if (UpdateTable) UpdateScenePrimitiveIndexToPersistentPrimitiveIndexTable();
+						return true;
+					}
+					
+					if (InputSettings->MeshDataGenerationTriangleMaximum > 0)
+					{
+						const int32 TriangleCount = GetMeshComponentTriangleCount(MeshComponent);
+						if (TriangleCount > InputSettings->MeshDataGenerationTriangleMaximum)
+						{
+							FName MeshName = FName(StaticMesh->GetName());
+							SkippedMeshesDueToTriangleCount.Add(MeshName, TriangleCount);
+							UE_LOG(SonoTraceUE, Warning, TEXT("SKIPPED: StaticMesh '%s' with %d triangles exceeds the maximum set (%d). Mesh data will not be generated for this mesh."),
+								   *StaticMesh->GetName(), TriangleCount, InputSettings->MeshDataGenerationTriangleMaximum);
+							PersistentPrimitiveIndexToPrimitiveComponent.Add(PersistentPrimitiveIndex, MeshComponent);
+							ScenePrimitiveIndexToPersistentPrimitiveIndex.Add(ScenePrimitiveIndex, PersistentPrimitiveIndex);
+							PersistentPrimitiveIndexToLabelsAndObjectTypes.Add(PersistentPrimitiveIndex, TTuple<FName, int32>(Label, ObjectTypeIndex));
+							if (UpdateTable) UpdateScenePrimitiveIndexToPersistentPrimitiveIndexTable();
+							return true;
+						}
+					}
+					
 					FSonoTraceUEMeshDataStruct NewMeshData;
 					CalculateMeshCurvature(MeshComponent, NewMeshData, InputSettings->CurvatureScale, InputSettings->EnableCurvatureTriangleSizeBasedScaler,
 						InputSettings->CurvatureScalerMinimumEffect, InputSettings->CurvatureScalerMaximumEffect, InputSettings->CurvatureScalerLowerTriangleSizeThreshold, InputSettings->CurvatureScalerUpperTriangleSizeThreshold, InputSettings->DiffractionTriangleSizeThreshold);
@@ -271,8 +300,35 @@ bool ASonoTraceUEActor::AddSkeletalMeshComponent(USkeletalMeshComponent* MeshCom
 			    }
 			    if (!SkeletalMeshToMeshDataIndex.Contains(SkeletalMesh)) 
 			    {
+				    if (ObjectSettings->DisableMeshDataGeneration)
+				    {
+					    FName MeshName = FName(SkeletalMesh->GetName());
+					    SkippedMeshesDueToTriangleCount.Add(MeshName, -1); 
+					    UE_LOG(SonoTraceUE, Warning, TEXT("SKIPPED: SkeletalMesh '%s' has DisableMeshDataGeneration enabled in ObjectSettings '%s'. Mesh data will not be generated."),
+						       *SkeletalMesh->GetName(), *ObjectSettings->Name.ToString());
+					    PersistentPrimitiveIndexToPrimitiveComponent.Add(PersistentPrimitiveIndex, MeshComponent);
+					    ScenePrimitiveIndexToPersistentPrimitiveIndex.Add(ScenePrimitiveIndex, PersistentPrimitiveIndex);
+					    PersistentPrimitiveIndexToLabelsAndObjectTypes.Add(PersistentPrimitiveIndex, TTuple<FName, int32>(Label, ObjectTypeIndex));
+					    if (UpdateTable) UpdateScenePrimitiveIndexToPersistentPrimitiveIndexTable();
+					    return true;
+				    }
+				    
+				    if (InputSettings->MeshDataGenerationTriangleMaximum > 0)
+				    {
+					    const int32 TriangleCount = GetMeshComponentTriangleCount(MeshComponent);
+					    if (TriangleCount > InputSettings->MeshDataGenerationTriangleMaximum)
+					    {
+						    FName MeshName = FName(SkeletalMesh->GetName());
+						    SkippedMeshesDueToTriangleCount.Add(MeshName, TriangleCount);
+						    UE_LOG(SonoTraceUE, Warning, TEXT("SKIPPED: SkeletalMesh '%s' with %d triangles exceeds the maximum set (%d). Mesh data will not be generated for this mesh."),
+							       *SkeletalMesh->GetName(), TriangleCount, InputSettings->MeshDataGenerationTriangleMaximum);
+						    PersistentPrimitiveIndexToPrimitiveComponent.Add(PersistentPrimitiveIndex, MeshComponent);
+						    PersistentPrimitiveIndexToLabelsAndObjectTypes.Add(PersistentPrimitiveIndex, TTuple<FName, int32>(Label, ObjectTypeIndex));
+						    if (UpdateTable) UpdateScenePrimitiveIndexToPersistentPrimitiveIndexTable();
+						    return true;
+					    }
+				    }				    
 				    FSonoTraceUEMeshDataStruct NewMeshData;
-				    // CalculateSkeletalMeshCurvature(SkeletalMesh, NewMeshData);
 			    	CalculateMeshCurvature(MeshComponent, NewMeshData, InputSettings->CurvatureScale, InputSettings->EnableCurvatureTriangleSizeBasedScaler,
 						InputSettings->CurvatureScalerMinimumEffect, InputSettings->CurvatureScalerMaximumEffect, InputSettings->CurvatureScalerLowerTriangleSizeThreshold, InputSettings->CurvatureScalerUpperTriangleSizeThreshold, InputSettings->DiffractionTriangleSizeThreshold);
 			    	GenerateBRDFAndMaterial(ObjectSettings, &NewMeshData);
@@ -5023,10 +5079,6 @@ void ASonoTraceUEActor::RunDebugDiffractionSimulationNew(int32 NumberOfInitialRa
 
 	const double DiffractionStartTime = FPlatformTime::Seconds();
 
-	// ---------------------------------------------------------
-	// STEP 1: GATHER CANDIDATES (Define candidate data for parallel processing)
-	// ---------------------------------------------------------
-	// Struct to hold data for each diffraction candidate
 	struct FDiffractionCandidate
 	{
 		int32 SampleIndex;
@@ -5034,11 +5086,10 @@ void ASonoTraceUEActor::RunDebugDiffractionSimulationNew(int32 NumberOfInitialRa
 		FVector WorldNormal;
 	};
 
-	// Pre-allocate candidate array - for this test, all samples are valid candidates
+	
 	TArray<FDiffractionCandidate> AllCandidates;
 	AllCandidates.SetNum(NumberOfInitialRays);
 
-	// Populate candidates (single-threaded gathering)
 	for (int32 SampleIndex = 0; SampleIndex < NumberOfInitialRays; ++SampleIndex)
 	{
 		FDiffractionCandidate& Cand = AllCandidates[SampleIndex];
@@ -5047,45 +5098,32 @@ void ASonoTraceUEActor::RunDebugDiffractionSimulationNew(int32 NumberOfInitialRa
 		Cand.WorldNormal = FixedNormal;
 	}
 
-	// ---------------------------------------------------------
-	// STEP 2: PROCESS CANDIDATES (Parallel)
-	// ---------------------------------------------------------
-
-	// Pre-allocate OUTPUT arrays to WORST CASE size (all candidates are valid)
-	// Use SetNum (not SetNumUninitialized) to properly initialize elements to avoid crashes on assignment
 	TArray<FSonoTraceUEPointStruct> TempResults;
 	TempResults.SetNum(AllCandidates.Num());
 	
 	TArray<float> TempStrengths;
 	TempStrengths.SetNum(AllCandidates.Num());
 
-	// Atomic counter to track how many valid points were added
+
 	volatile int32 ValidPointCount = 0;
 
-	// Cache object settings pointer for thread safety (read-only access)
 	const FSonoTraceUEObjectSettingsStruct& CachedObjectSettings = GeneratedSettings.ObjectSettings[0];
 	const TArray<float>& CachedFrequencies = GeneratedSettings.Frequencies;
 	const TArray<float>& CachedMaterialStrengthsDiffraction = CachedObjectSettings.MaterialStrengthsDiffraction;
 	const TArray<float>* CachedDefaultTriangleBRDF = &CachedObjectSettings.DefaultTriangleBRDF;
 	const TArray<float>* CachedDefaultTriangleMaterial = &CachedObjectSettings.DefaultTriangleMaterial;
 
-	// Cache world pointer for line traces (thread-safe for read-only queries)
 	UWorld* CachedWorld = GetWorld();
 
-	// The Parallel Loop
 	ParallelFor(AllCandidates.Num(), [&](int32 Idx)
 	{
 		const FDiffractionCandidate& Cand = AllCandidates[Idx];
 		const FVector& PointLocation = Cand.WorldPosition;
 		const FVector& PointNormal = Cand.WorldNormal;
 
-		// --- LINE TRACE FOR LINE-OF-SIGHT CHECK (for fair test comparison) ---
-		// This simulates the line-of-sight check done in real diffraction code
-		// The result is intentionally ignored - we just want the execution cost
 		{
 			FCollisionQueryParams TraceParams(FName(TEXT("DiffractionTraceTest")), true);
 			FHitResult HitResult;
-			// Trace from sensor location to the diffraction point (same as real code)
 			CachedWorld->LineTraceSingleByChannel(
 				HitResult,
 				TestSensorLocation,
@@ -5093,10 +5131,9 @@ void ASonoTraceUEActor::RunDebugDiffractionSimulationNew(int32 NumberOfInitialRa
 				ECC_Visibility,
 				TraceParams
 			);
-			// Result ignored - just executing the trace for fair timing comparison
+			
 		}
 
-		// Calculate emitter to diffraction distances
 		TArray<float> VectorEmitterToDiffractionDistance;
 		VectorEmitterToDiffractionDistance.Init(0, ActualEmitterCount);
 
@@ -5107,7 +5144,6 @@ void ASonoTraceUEActor::RunDebugDiffractionSimulationNew(int32 NumberOfInitialRa
 
 		float DistancePointToSensor = FVector::Dist(PointLocation, TestSensorLocation);
 
-		// Build the point struct
 		FSonoTraceUEPointStruct NewPoint;
 		NewPoint.TotalDistancesToReceivers.Init(TArray<float>(), ActualEmitterCount);
 		NewPoint.Strengths.SetNum(ActualEmitterCount);
@@ -5161,24 +5197,15 @@ void ASonoTraceUEActor::RunDebugDiffractionSimulationNew(int32 NumberOfInitialRa
 		NewPoint.IsSpecular = false;
 		NewPoint.IsDiffraction = true;
 
-		// --- CRITICAL SECTION: THREAD SAFE ADD ---
-		// Increment counter atomically. Returns the NEW value.
 		int32 WriteIndex = FPlatformAtomics::InterlockedIncrement(&ValidPointCount) - 1;
 
-		// Write to the pre-allocated arrays
 		TempResults[WriteIndex] = MoveTemp(NewPoint);
 		TempStrengths[WriteIndex] = SummedStrength;
 	});
 
-	// ---------------------------------------------------------
-	// STEP 3: CLEANUP & FINALIZE
-	// ---------------------------------------------------------
-
-	// Shrink arrays to actual number of valid items found
 	TempResults.SetNum(ValidPointCount);
 	TempStrengths.SetNum(ValidPointCount);
 
-	// Build final output struct
 	FSonoTraceUESubOutputStruct TestDiffractionSubOutput;
 	TestDiffractionSubOutput.MaximumCurvature = 0.0f;
 	TestDiffractionSubOutput.MaximumStrength = 0.0f;
@@ -5186,7 +5213,6 @@ void ASonoTraceUEActor::RunDebugDiffractionSimulationNew(int32 NumberOfInitialRa
 	TestDiffractionSubOutput.ReflectedPoints = MoveTemp(TempResults);
 	TestDiffractionSubOutput.ReflectedStrengths = MoveTemp(TempStrengths);
 
-	// Calculate max stats (single-threaded loop over the reduced array)
 	for (const FSonoTraceUEPointStruct& Pt : TestDiffractionSubOutput.ReflectedPoints)
 	{
 		if (Pt.SummedStrength > TestDiffractionSubOutput.MaximumStrength)
@@ -5198,7 +5224,6 @@ void ASonoTraceUEActor::RunDebugDiffractionSimulationNew(int32 NumberOfInitialRa
 	const double DiffractionEndTime = FPlatformTime::Seconds();
 	OutTimeMs = static_cast<float>((DiffractionEndTime - DiffractionStartTime) * 1000.0);
 	
-	// Cleanup memory
 	for (FSonoTraceUEPointStruct& Point : TestDiffractionSubOutput.ReflectedPoints)
 	{
 		Point.TotalDistancesFromEmitters.Empty();
@@ -5447,6 +5472,46 @@ void ASonoTraceUEActor::GenerateBRDFAndMaterial(const FSonoTraceUEObjectSettings
 		MeshData->ImportanceVertexOrderedBRDFValue.Add(Pair.Value);
 		MeshData->ImportanceVertexOrderedIndex.Add(Pair.Index); 
 	}
+}
+
+int32 ASonoTraceUEActor::GetMeshComponentTriangleCount(UMeshComponent* MeshComponent)
+{
+	if (!MeshComponent)
+	{
+		return -1;
+	}	
+
+	UDynamicMesh* DynamicMesh = NewObject<UDynamicMesh>();
+	
+	static FGeometryScriptCopyMeshFromComponentOptions Options;
+	Options.bWantNormals = false;  
+	Options.bWantTangents = false;
+	Options.bWantInstanceColors = false;
+	
+	FTransform DummyTransform;         
+	EGeometryScriptOutcomePins Outcome; 	
+	UGeometryScriptLibrary_SceneUtilityFunctions::CopyMeshFromComponent(
+		MeshComponent,
+		DynamicMesh,
+		Options,
+		false,        
+		DummyTransform,
+		Outcome,
+		nullptr
+	);
+	
+	if (Outcome != EGeometryScriptOutcomePins::Success)
+	{
+		return -1;		
+	}
+	
+	const FDynamicMesh3* Mesh = DynamicMesh->GetMeshPtr();
+	if (!Mesh)
+	{
+		return -1;			
+	}
+	
+	return Mesh->TriangleCount();
 }
 
 void ASonoTraceUEActor::CalculateMeshCurvature(UMeshComponent* MeshComponent, FSonoTraceUEMeshDataStruct& OutMeshData, const float CurvatureScaleFactor, const bool EnableCurvatureTriangleSizeBasedScaler,
@@ -5766,6 +5831,7 @@ TArray<FSonoTraceUEObjectSettingsStruct>  ASonoTraceUEActor::PopulateObjectSetti
 				CurrentNewObjectSetting.Name = RowName;
 				CurrentNewObjectSetting.Description = Row->Description;
 				CurrentNewObjectSetting.DrawDebugFirstOccurrence = Row->DrawDebugFirstOccurrence;
+				CurrentNewObjectSetting.DisableMeshDataGeneration = Row->DisableMeshDataGeneration;
 				if (UStaticMesh* StaticMesh = Cast<UStaticMesh>(Row->Asset))
 				{
 					CurrentNewObjectSetting.StaticMesh = StaticMesh;

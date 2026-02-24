@@ -8,6 +8,21 @@ See other branches that only include the plugin so you can easily checkout those
 
 SonoTraceUE is a high-fidelity acoustic simulation plugin for Unreal Engine 5 that leverages hardware-accelerated ray tracing to simulate ultrasonic sensor behavior in complex 3D environments. The plugin provides physically-based acoustic propagation modeling, including specular reflection, diffraction components, and direct path transmission, making it suitable for research in robotics, autonomous systems, and acoustic sensor development. It has an API extension so it can be interfaced with from a external API client. 
 
+ - Demonstration video: [https://www.youtube.com/watch?v=_Z39IlmT22E](https://www.youtube.com/watch?v=_Z39IlmT22E)
+ - Paper Preprint: [https://arxiv.org/abs/2602.19652](https://arxiv.org/abs/2602.19652)
+
+## Publication
+We kindly ask to cite our paper if you find this repository useful:
+```
+@article{jansen2026sonotraceue,
+  title={Hardware-Accelerated Geometrical Simulation of Biological and Engineered In-Air Ultrasonic Systems}, 
+  author={Jansen, Wouter and Steckel, Jan},
+  year={2026},
+  url={https://arxiv.org/abs/2602.19652},
+  doi={10.48550/arXiv.2602.19652},
+}
+```
+
 ## Requirements
 
 - **Unreal Engine Version**: 5.4

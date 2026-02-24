@@ -66,6 +66,7 @@ struct SONOTRACEUE_API FSonoTraceUEObjectSettingsStruct
 	USkeletalMesh* SkeletalMesh = nullptr;
 	FString Description;
 	bool DrawDebugFirstOccurrence = false;
+	bool DisableMeshDataGeneration = false;
 	
 	// BRDF SETTINGS
 	float BrdfTransitionPosition = 0;
@@ -145,6 +146,9 @@ struct SONOTRACEUE_API FSonoTraceUEObjectSettingsTable : public FTableRowBase
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE")
 	bool DrawDebugFirstOccurrence = false;
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE")
+	bool DisableMeshDataGeneration = false;
 };
 
 UENUM(BlueprintType)
@@ -413,8 +417,13 @@ public:
 	bool EnableSpecularSimulationOnlyOnLastHits = false;
 
 	// Amount ticks a manually added object is attempted to be added to the mesh data before giving up
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE|Configuration|Simulation|General", meta=(Units="Times"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE|Configuration|Simulation|Objects", meta=(Units="Times"))
 	int32 MeshDataGenerationAttempts = 5;
+	
+	// Set a maximum triangle count for the generated mesh data of manually added objects.
+	// If the generated mesh data exceeds this count, it will be discarded to avoid performance issues. Set this to 0 to disable this check.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE|Configuration|Simulation|Objects")
+	int32 MeshDataGenerationTriangleMaximum = 0;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE|Configuration|Simulation|Objects")
 	UDataTable* ObjectSettingsDataTable;
@@ -1350,6 +1359,7 @@ protected:
 	static FVector CalculateTrianglePosition(const FVector3f& Vertex1, const FVector3f& Vertex2, const FVector3f& Vertex3);
 	static FVector CalculateTriangleNormal(const FVector3f& Vertex1, const FVector3f& Vertex2, const FVector3f& Vertex3);
 	static float CalculateTriangleCurvature(const FVector3f& Vertex1, const FVector3f& Vertex2, const FVector3f& Vertex3, const FVector3f& Normal1, const FVector3f& Normal2, const FVector3f& Normal3);
+	static int32 GetMeshComponentTriangleCount(UMeshComponent* MeshComponent);
 	static TArray<uint8> SerializeObjectSettingsStruct(FSonoTraceUEObjectSettingsStruct* ObjectSettingsStruct);
 	static TArray<uint8> SerializePointStruct(FSonoTraceUEPointStruct* PointStruct);
 	static void DrawDebugNonSymmetricalFrustum(const UWorld* InWorld, const FTransform& StartTransform, const float LowerAzimuthLimit, const float UpperAzimuthLimit, const float LowerElevationLimit, const float UpperElevationLimit, const float Distance, FColor const& Color, bool bPersistentLines = false, float LifeTime=-1.f, uint8 DepthPriority = 0, float Thickness = 0.f);
@@ -1414,6 +1424,10 @@ protected:
 	UPROPERTY()
 	TMap<USkeletalMesh*, int32> SkeletalMeshCounter;
 	TMap<int32, int32> ScenePrimitiveIndexToPersistentPrimitiveIndex;
+	
+	// Track meshes skipped due to triangle count exceeding MeshDataGenerationTriangleMaximum
+	// Key: Mesh name, Value: Triangle count
+	TMap<FName, int32> SkippedMeshesDueToTriangleCount;
 	
 	TArray<FTransform> EmitterPoses;
 	TArray<FTransform> ReceiverPoses;
