@@ -7,6 +7,21 @@ This branch has only the plugin source code. See other branches that also includ
 
 SonoTraceUE is a high-fidelity acoustic simulation plugin for Unreal Engine 5 that leverages hardware-accelerated ray tracing to simulate ultrasonic sensor behavior in complex 3D environments. The plugin provides physically-based acoustic propagation modeling, including specular reflection, diffraction components, and direct path transmission, making it suitable for research in robotics, autonomous systems, and acoustic sensor development. It has an API extension so it can be interfaced with from a external API client. 
 
+ - Demonstration video: [https://www.youtube.com/watch?v=_Z39IlmT22E](https://www.youtube.com/watch?v=_Z39IlmT22E)
+ - Paper Preprint: [https://arxiv.org/abs/2602.19652](https://arxiv.org/abs/2602.19652)
+
+## Publication
+We kindly ask to cite our paper if you find this repository useful:
+```
+@article{jansen2026sonotraceue,
+  title={Hardware-Accelerated Geometrical Simulation of Biological and Engineered In-Air Ultrasonic Systems}, 
+  author={Jansen, Wouter and Steckel, Jan},
+  year={2026},
+  url={https://arxiv.org/abs/2602.19652},
+  doi={10.48550/arXiv.2602.19652},
+}
+```
+
 ## Requirements
 
 - **Unreal Engine Version**: 5.4
@@ -716,13 +731,25 @@ Optimization: only calculates BRDF for the final bounce of each ray.
 
 ---
 
+### Object Settings Configuration
+
 ```cpp
-UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Configuration|Simulation|General")
+UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Configuration|Simulation|Objects")
 int32 MeshDataGenerationAttempts
 ```
 Number of ticks to attempt mesh data generation before timeout (default: 5).
 
-### Object Settings Configuration
+---
+
+```cpp
+UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Configuration|Simulation|Objects")
+int32 MeshDataGenerationTriangleMaximum
+```
+Set a maximum triangle count for the generated mesh data of manually added objects.
+If the generated mesh data exceeds this count, it will be discarded to avoid performance issues. 
+Set this to 0 to disable this check. (default: 0).
+
+---
 
 ```cpp
 UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Configuration|Simulation|Objects")
@@ -733,12 +760,13 @@ References a DataTable with row type `FSonoTraceUEObjectSettingsTable` for per-o
 
 **FSonoTraceUEObjectSettingsTable Structure**:
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `Asset` | `UObject*` | Reference to StaticMesh or SkeletalMesh |
-| `Description` | `FString` | Human-readable description |
-| `ObjectSettings` | `FSonoTraceUEObjectSettingsOriginStruct` | Acoustic properties (see below) |
+| Field | Type | Description                                   |
+|-------|------|-----------------------------------------------|
+| `Asset` | `UObject*` | Reference to StaticMesh or SkeletalMesh       |
+| `Description` | `FString` | Human-readable description                    |
+| `ObjectSettings` | `FSonoTraceUEObjectSettingsOriginStruct` | Acoustic properties (see below)               |
 | `DrawDebugFirstOccurrence` | `bool` | Enable debug visualization for first instance |
+| `DisableMeshDataGeneration` | `bool` | Disable the mesh generation for this mesh     |
 
 ---
 
