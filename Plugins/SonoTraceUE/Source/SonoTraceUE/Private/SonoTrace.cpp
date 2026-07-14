@@ -6,6 +6,8 @@
 #include "Modules/ModuleManager.h"
 #include "../Private/ScenePrivate.h"
 #include "../Private/Nanite/NaniteRayTracing.h"
+#include "RayTracingMeshDrawCommands.h"
+#include "RayTracingPayloadType.h"
 
 #if RHI_RAYTRACING
 #define NUM_THREADS_PER_GROUP_DIMENSION 8
@@ -167,7 +169,7 @@ void FSonoTrace::UpdateParameters(const FSonoTraceParameters& InputParameters)
 	bCachedParamsAreValid = true;
 }
 
-void FSonoTrace::BindSonoTraceCHSBindings(FRHICommandList& RHICmdList, const FViewInfo& View, FRHIRayTracingScene* RHIScene, FRHIUniformBuffer* SceneUniformBuffer, FRayTracingPipelineState* PipelineState)
+void FSonoTrace::BindSonoTraceCHSBindings(FRHICommandList& RHICmdList, const FViewInfo& View, const FRayTracingMeshCommandStorage& RayTracingMeshCommands, FRHIShaderBindingTable* SBT, FRHIUniformBuffer* SceneUniformBuffer, FRayTracingPipelineState* PipelineState)
 {
 	FSceneRenderingBulkObjectAllocator Allocator;
 
@@ -178,7 +180,7 @@ void FSonoTrace::BindSonoTraceCHSBindings(FRHICommandList& RHICmdList, const FVi
 			: RHICmdList.Alloc(Size, Align);
 	};
 
-	const int32 NumTotalBindings = View.VisibleRayTracingMeshCommands.Num();
+	const int32 NumTotalBindings = View.VisibleRayTracingShaderBindings.Num();
 	const uint32 MergedBindingsSize = sizeof(FRayTracingLocalShaderBindings) * NumTotalBindings;
 	FRayTracingLocalShaderBindings* Bindings = (FRayTracingLocalShaderBindings*)Alloc(MergedBindingsSize, alignof(FRayTracingLocalShaderBindings));
 
@@ -226,26 +228,26 @@ void FSonoTrace::BindSonoTraceCHSBindings(FRHICommandList& RHICmdList, const FVi
 	FBinding ShaderBindingNaniteRT = SetupBinding(PermutationVector);
 
 	uint32 BindingIndex = 0;
-	for (const FVisibleRayTracingMeshCommand VisibleMeshCommand : View.VisibleRayTracingMeshCommands)
+	for (const FRayTracingShaderBindingData& VisibleShaderBinding : View.VisibleRayTracingShaderBindings)
 	{
-		const FRayTracingMeshCommand& MeshCommand = *VisibleMeshCommand.RayTracingMeshCommand;
+		const FRayTracingMeshCommand& MeshCommand = VisibleShaderBinding.GetRayTracingMeshCommand(RayTracingMeshCommands);
 
 		const FBinding& HelperBinding = MeshCommand.IsUsingNaniteRayTracing() ? ShaderBindingNaniteRT : ShaderBinding;
 
 		FRayTracingLocalShaderBindings Binding = {};
 		Binding.ShaderIndexInPipeline = HelperBinding.ShaderIndexInPipeline;
-		Binding.InstanceIndex = VisibleMeshCommand.InstanceIndex;
+		Binding.RecordIndex = VisibleShaderBinding.SBTRecordIndex;
+		Binding.Geometry = VisibleShaderBinding.RayTracingGeometry;
 		Binding.SegmentIndex = MeshCommand.GeometrySegmentIndex;
 		Binding.UniformBuffers = HelperBinding.UniformBufferArray;
 		Binding.NumUniformBuffers = HelperBinding.NumUniformBuffers;
-		Binding.UserData = VisibleMeshCommand.InstanceIndex;
 
 		Bindings[BindingIndex] = Binding;
 		BindingIndex++;
 	}
 	constexpr bool bCopyDataToInlineStorage = false;
 	RHICmdList.SetRayTracingHitGroups(
-		RHIScene,
+		SBT,
 		PipelineState,
 		NumTotalBindings, Bindings,
 		bCopyDataToInlineStorage);
@@ -312,7 +314,7 @@ void FSonoTrace::Execute_RenderThread(FPostOpaqueRenderParameters& Parameters)
 
 	FRHIRayTracingShader* HitGroupTable[] = { HitGroupShader.GetRayTracingShader(), HitGroupShaderNaniteRT.GetRayTracingShader()};
 	Initializer.SetHitGroupTable(HitGroupTable);
-	Initializer.bAllowHitGroupIndexing = true; // Required for stable output using GetBaseInstanceIndex().
+	// Hit-group indexing is now configured on the Shader Binding Table itself (see ERayTracingHitGroupIndexingMode::Allow below).
 
 	const auto MissShader = ShaderMap->GetShader<FSonoTraceMS>();
 	FRHIRayTracingShader* MissTable[] = { MissShader.GetRayTracingShader() };
@@ -394,33 +396,41 @@ void FSonoTrace::Execute_RenderThread(FPostOpaqueRenderParameters& Parameters)
 	ERDGInitialDataFlags::None);
 	PassParameters->OutputBuffer = GraphBuilder->CreateUAV(StructuredOutputBufferRef, PF_Unknown);
 
-	FRHIRayTracingScene* RHIScene = CachedParams.Scene->RayTracingScene.GetRHIRayTracingScene();
-	
+	// Allocate a transient Shader Binding Table for this frame's dispatch. The SBT is decoupled from the
+	// TLAS/FRHIRayTracingScene as of UE 5.8 - dispatch and hit-group binding calls now target the SBT directly.
+	const FShaderBindingTableRHIRef SBT = CachedParams.Scene->RayTracingSBT.AllocateTransientRHI(
+		GraphBuilder->RHICmdList,
+		ERayTracingShaderBindingMode::RTPSO,
+		ERayTracingHitGroupIndexingMode::Allow,
+		Initializer.GetMaxLocalBindingDataSize());
+
 	// Add GPU stat scope for profiling (shows in 'stat gpu' and 'profilegpu')
-	RDG_GPU_STAT_SCOPE(*GraphBuilder, SonoTraceRayTracing);
-	
+	RDG_EVENT_SCOPE_STAT(*GraphBuilder, SonoTraceRayTracing, "SonoTrace RayTracing");
+
 	// Add the ray trace dispatch pass
 	GraphBuilder->AddPass(
 		RDG_EVENT_NAME("SonoTrace"),
 		PassParameters,
 		ERDGPassFlags::Compute,
-		[PassParameters, RayGenShader, RHIScene, Pipeline, Parameters, NumOfRays, this](FRHIRayTracingCommandList& RHICmdList)
+		[PassParameters, RayGenShader, SBT, Pipeline, Parameters, NumOfRays, this](FRHICommandList& RHICmdList)
 		{
-			const FRDGBufferSRVRef LayerView = CachedParams.Scene->RayTracingScene.GetLayerView(ERayTracingSceneLayer::Base);
+			const FRayTracingScene::FViewHandle& ViewHandle = Parameters.View->GetRayTracingSceneViewHandle();
+			const FRDGBufferSRVRef LayerView = CachedParams.Scene->RayTracingScene.GetLayerView(ERayTracingSceneLayer::Base, ViewHandle);
 			if (LayerView) {
 				PassParameters->TLAS = LayerView->GetRHI();
 
-				FRayTracingShaderBindingsWriter GlobalResources;
+				FRHIBatchedShaderParameters& GlobalResources = RHICmdList.GetScratchShaderParameters();
 				SetShaderParameters(GlobalResources, RayGenShader, *PassParameters);
-				
-				BindSonoTraceCHSBindings(RHICmdList, *Parameters.View, RHIScene, PassParameters->SceneUniformBuffer->GetRHI(), Pipeline);
-				
-				RHICmdList.SetRayTracingMissShader(RHIScene, 0, Pipeline, 0 /* ShaderIndexInPipeline */, 0, nullptr, 0);
-				
-				RHICmdList.RayTraceDispatch(Pipeline, RayGenShader.GetRayTracingShader(), RHIScene, GlobalResources, NumOfRays, 1);
+
+				BindSonoTraceCHSBindings(RHICmdList, *Parameters.View, CachedParams.Scene->CachedRayTracingMeshCommands, SBT, PassParameters->SceneUniformBuffer->GetRHI(), Pipeline);
+
+				RHICmdList.SetRayTracingMissShader(SBT, 0, Pipeline, 0 /* ShaderIndexInPipeline */, 0, nullptr, 0);
+				RHICmdList.CommitShaderBindingTable(SBT);
+
+				RHICmdList.RayTraceDispatch(Pipeline, RayGenShader.GetRayTracingShader(), SBT, GlobalResources, NumOfRays, 1);
 			}
 		}
-	);	
+	);
 	AddEnqueueCopyPass(*GraphBuilder, CachedParams.GPUReadback, StructuredOutputBufferRef, NumOutput * sizeof(FStructuredOutputBufferElem));
 
 	RunState = 2;

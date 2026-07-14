@@ -150,13 +150,13 @@ RAY_TRACING_ENTRY_RAYGEN(SonoTraceRGS)
 			// Check the hit result
 			if (Payload.HitT > 0.0f)
 			{
-				float3 ReflectionDirection = normalize(reflect(Ray.Direction, Payload.WorldNormal));	
+				float3 ReflectionDirection = normalize(reflect(Ray.Direction, Payload.WorldNormal));
 				float3 HitPos = Ray.Origin + Ray.Direction * Payload.HitT;
 				float3 HitPosInCameraFrame = HitPos + DFHackToFloat(PrimaryView.WorldCameraOrigin);
 				RayTotalDistanceSoFar = RayTotalDistanceSoFar + Payload.HitT;
-				
+
 				OutputBuffer[OutputIndex].IsHit = true;
-				OutputBuffer[OutputIndex].HitScenePrimitiveIndex = Payload.ScenePrimitiveIndex;
+				OutputBuffer[OutputIndex].HitScenePrimitiveIndex = Payload.GPUSceneInstanceId;
 				OutputBuffer[OutputIndex].HitTriangleIndex = Payload.TriangleIndex;
 				OutputBuffer[OutputIndex].HitPosX = HitPosInCameraFrame.x;
 				OutputBuffer[OutputIndex].HitPosY = HitPosInCameraFrame.y;
@@ -330,7 +330,7 @@ RAY_TRACING_ENTRY_CLOSEST_HIT(SonoTraceCHS, FRayTracingDebugPayload, Payload, FR
 	Payload.HitT = RayTCurrent();
 
 	Payload.TriangleIndex = PrimitiveIndex();
-	const int ScenePrimitiveIndex = GetInstanceUserData();
-	Payload.ScenePrimitiveIndex = ScenePrimitiveIndex;
-	Payload.WorldNormal = GetGeometryNormalFromTriangleBaseAttributes(PrimitiveIndex());
+	const uint GPUSceneInstanceId = GetInstanceUserData();
+	Payload.GPUSceneInstanceId = GPUSceneInstanceId;
+	Payload.WorldNormal = GetGeometryNormalFromTriangleBaseAttributes(PrimitiveIndex(), GetClusterID());
 }

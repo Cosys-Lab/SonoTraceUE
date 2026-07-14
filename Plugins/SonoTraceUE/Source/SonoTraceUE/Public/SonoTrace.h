@@ -12,6 +12,8 @@ DECLARE_LOG_CATEGORY_EXTERN(SonoTraceUE, Log, All);
 inline constexpr UINT32 MaxEmitterCount = 32;
 
 class FSonoTrace;
+class FRHIShaderBindingTable;
+class FRayTracingMeshCommandStorage;
 
 struct FStructuredOutputBufferElem
 {
@@ -68,7 +70,7 @@ public:
 	
 private:
 	void Execute_RenderThread(FPostOpaqueRenderParameters& Parameters);
-	static void BindSonoTraceCHSBindings(FRHICommandList& RHICmdList, const FViewInfo& View, FRHIRayTracingScene* RHIScene, FRHIUniformBuffer* SceneUniformBuffer, FRayTracingPipelineState* PipelineState);
+	static void BindSonoTraceCHSBindings(FRHICommandList& RHICmdList, const FViewInfo& View, const FRayTracingMeshCommandStorage& RayTracingMeshCommands, FRHIShaderBindingTable* SBT, FRHIUniformBuffer* SceneUniformBuffer, FRayTracingPipelineState* PipelineState);
 	
 	FDelegateHandle SonoTraceRenderDelegate;
 	FSonoTraceParameters CachedParams;

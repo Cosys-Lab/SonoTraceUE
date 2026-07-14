@@ -135,7 +135,7 @@ struct SONOTRACEUE_API FSonoTraceUEObjectSettingsTable : public FTableRowBase
 	GENERATED_BODY()
 
 	// Currently, only StaticMesh and SkeletalMesh are supported
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(AllowedClasses = "StaticMesh,SkeletalMesh"), Category = "SonoTraceUE")
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(AllowedClasses = "/Script/Engine.StaticMesh,/Script/Engine.SkeletalMesh"), Category = "SonoTraceUE")
     UObject* Asset = nullptr;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE")
