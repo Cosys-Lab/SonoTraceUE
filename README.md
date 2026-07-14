@@ -25,7 +25,7 @@ We kindly ask to cite our paper if you find this repository useful:
 
 ## Requirements
 
-- **Unreal Engine Version**: 5.4
+- **Unreal Engine Version**: 5.8
 - **Hardware Requirements**:
   - GPU with hardware ray tracing support
   - DirectX 12 support
@@ -104,6 +104,15 @@ To define the BRDF properties of objects one can use our custom `DataTable` stru
 3. Configure BRDF and material properties per object. You can also set other settings like a description.
 
 all other objects will use the default settings as set in the Input Settings.
+
+### Known Limitations
+
+Per-triangle acoustic properties (curvature, BRDF, material) are computed by converting each object's 3D asset.
+It does **not** work for **Landscape** actors. Landscape's Nanite representation static mesh proxy) is produced by a separate, synthetic mesh-generation pipeline, and its triangulation does not correspond to the one hardware ray tracing actually traces against. In practice this means the triangle index returned for a Landscape hit can exceed the bounds of the pre-computed per-triangle arrays, which is logged as a `Mesh data triangle index out of bounds` warning and falls back to default acoustic properties for that hit. The simulation output is still valid, just without meaningful per-triangle curvature/BRDF/material data for Landscape hits.
+
+To get this cleanly instead of relying on the automatic fallback, add a row to your `ObjectSettingsDataTable` (see [Creating new object settings](#creating-new-object-settings)) with `Asset` set to the Landscape's Nanite proxy static mesh and enable `DisableMeshDataGeneration` on that row.
+
+This has only been observed for Landscape's Nanite proxy mesh and other Nanite-enabled static meshes tested so far do not exhibit the mismatch. 
 
 ## SonoTraceUE Actor
 
