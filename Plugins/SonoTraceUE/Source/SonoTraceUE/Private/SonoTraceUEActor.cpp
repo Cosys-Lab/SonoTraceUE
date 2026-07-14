@@ -202,7 +202,7 @@ bool ASonoTraceUEActor::AddStaticMeshComponent(UStaticMeshComponent* MeshCompone
 					if (ObjectSettings->DisableMeshDataGeneration)
 					{
 						FName MeshName = FName(StaticMesh->GetName());
-						SkippedMeshesDueToTriangleCount.Add(MeshName, -1); 
+						SkippedMeshesDueToTriangleCount.Add(MeshName, -1);
 						UE_LOG(SonoTraceUE, Warning, TEXT("SKIPPED: StaticMesh '%s' has DisableMeshDataGeneration enabled in ObjectSettings '%s'. Mesh data will not be generated."),
 							   *StaticMesh->GetName(), *ObjectSettings->Name.ToString());
 						PersistentPrimitiveIndexToPrimitiveComponent.Add(PersistentPrimitiveIndex, MeshComponent);
@@ -211,7 +211,24 @@ bool ASonoTraceUEActor::AddStaticMeshComponent(UStaticMeshComponent* MeshCompone
 						if (UpdateTable) UpdateScenePrimitiveIndexToPersistentPrimitiveIndexTable();
 						return true;
 					}
-					
+
+					if (StaticMesh->IsNaniteEnabled())
+					{
+						// Nanite ray tracing hits report triangle indices from the Nanite BVH/cluster representation,
+						// which do not correspond 1:1 to the triangulation this plugin's DynamicMesh conversion sees.
+						// Per-triangle curvature/BRDF/material data would be silently wrong or out-of-bounds for
+						// Nanite meshes, so skip generating it and always fall back to this object's defaults instead.
+						FName MeshName = FName(StaticMesh->GetName());
+						SkippedMeshesDueToTriangleCount.Add(MeshName, -1);
+						UE_LOG(SonoTraceUE, Warning, TEXT("SKIPPED: StaticMesh '%s' has Nanite enabled. Per-triangle curvature/BRDF/material data is not supported for Nanite meshes; default acoustic properties from ObjectSettings '%s' will be used for all hits on this mesh instead."),
+							   *StaticMesh->GetName(), *ObjectSettings->Name.ToString());
+						PersistentPrimitiveIndexToPrimitiveComponent.Add(PersistentPrimitiveIndex, MeshComponent);
+						ScenePrimitiveIndexToPersistentPrimitiveIndex.Add(ScenePrimitiveIndex, PersistentPrimitiveIndex);
+						PersistentPrimitiveIndexToLabelsAndObjectTypes.Add(PersistentPrimitiveIndex, TTuple<FName, int32>(Label, ObjectTypeIndex));
+						if (UpdateTable) UpdateScenePrimitiveIndexToPersistentPrimitiveIndexTable();
+						return true;
+					}
+
 					if (InputSettings->MeshDataGenerationTriangleMaximum > 0)
 					{
 						const int32 TriangleCount = GetMeshComponentTriangleCount(MeshComponent);

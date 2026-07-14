@@ -105,14 +105,10 @@ To define the BRDF properties of objects one can use our custom `DataTable` stru
 
 all other objects will use the default settings as set in the Input Settings.
 
-### Known Limitations
+### Known Limitations: Nanite meshes
 
-Per-triangle acoustic properties (curvature, BRDF, material) are computed by converting each object's 3D asset.
-It does **not** work for **Landscape** actors. Landscape's Nanite representation static mesh proxy) is produced by a separate, synthetic mesh-generation pipeline, and its triangulation does not correspond to the one hardware ray tracing actually traces against. In practice this means the triangle index returned for a Landscape hit can exceed the bounds of the pre-computed per-triangle arrays, which is logged as a `Mesh data triangle index out of bounds` warning and falls back to default acoustic properties for that hit. The simulation output is still valid, just without meaningful per-triangle curvature/BRDF/material data for Landscape hits.
-
-To get this cleanly instead of relying on the automatic fallback, add a row to your `ObjectSettingsDataTable` (see [Creating new object settings](#creating-new-object-settings)) with `Asset` set to the Landscape's Nanite proxy static mesh and enable `DisableMeshDataGeneration` on that row.
-
-This has only been observed for Landscape's Nanite proxy mesh and other Nanite-enabled static meshes tested so far do not exhibit the mismatch. 
+Per-triangle acoustic properties (curvature, BRDF, material) are computed by converting each object's 3d asset. For **Nanite-enabled meshes**, the triangle index ray tracing reports does not correspond to this converted triangulation, so per-triangle lookups can land out of bounds, this includes Landscape actors, whose Nanite mesh proxy is always Nanite-enabled. The plugin detects this automatically: any mesh with Nanite enabled has mesh-data generation skipped entirely, the same as manually enabling `DisableMeshDataGeneration` for it in the `ObjectSettingsDataTable` (see [Creating new object settings](#creating-new-object-settings)), all hits on that object use the object type's default acoustic properties instead, with no per-hit warning spam. This also covers Landscape actors automatically, since their Nanite proxy mesh isn't a selectable asset in the Content Browser and can't be added to the settings table manually.
+If you still see `Mesh data triangle index out of bounds` warnings for a mesh that is **not** Nanite-enabled, that's likely a separate issue possibly related to LOD selection or multi-material-slot geometry segments.
 
 ## SonoTraceUE Actor
 
