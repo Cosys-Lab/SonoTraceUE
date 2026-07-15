@@ -58,6 +58,10 @@ You can add it directly through the Place Actors panel or through a blueprint as
 
 ## Usage Tips
 
+### Excluding an actor entirely
+
+To exclude an actor entirely from the SonoTraceUE mesh analysis system (no registration, no mesh data generation, never appears in hit output) - for example a decorative sky dome/backdrop that shouldn't participate in the acoustic simulation at all - add the Actor Tag `SonoTraceUEIgnore` to it (Details panel → Tags). It will be skipped as soon as it's added to the system (e.g. during initial actor scanning, or via `AddActor`).
+
 ### Skeletal Meshes and Diffraction
 
 By default, skeletal meshes should have diffraction disabled as the diffraction is based on the initial frame pre-calculation location of all triangles, and animations and deformations are not taking into account. Enable with:

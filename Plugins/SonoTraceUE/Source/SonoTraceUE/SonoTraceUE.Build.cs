@@ -71,7 +71,8 @@ public class SonoTraceUE : ModuleRules
 				"GeometryCore",
 				"GeometryFramework",
 				"GeometryScriptingCore",
-				// ... add private dependencies that you statically link with here ...	
+				"Landscape",
+				// ... add private dependencies that you statically link with here ...
 			}
 		);
 		

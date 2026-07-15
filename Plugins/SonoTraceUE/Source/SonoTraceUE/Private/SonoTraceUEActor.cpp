@@ -8,6 +8,7 @@
 #include "SceneInterface.h"
 #include "Engine/DataTable.h"
 #include "SonoTrace.h"
+#include "LandscapeComponent.h"
 #include "Math/UnrealMathUtility.h"
 #include <string>
 #include "ObjectDeliverer/Public/Protocol/ProtocolTcpIpClient.h"
@@ -147,6 +148,10 @@ bool ASonoTraceUEActor::AddActor(AActor* Actor, const bool OverrideInitializatio
 {
 	if (!Initialized && !OverrideInitialization)
 		return false;
+	// Actors tagged "SonoTraceUEIgnore" (e.g. sky domes, decorative backdrops) are skipped entirely -
+	// not registered, not mesh-analyzed, never part of hit output.
+	if (Actor->ActorHasTag(TEXT("SonoTraceUEIgnore")))
+		return true;
 	TArray<UStaticMeshComponent*> StaticMeshComponents;
 	Actor->GetComponents<UStaticMeshComponent>(StaticMeshComponents, true);
 	FString ActorName = Actor->GetName();
@@ -165,8 +170,50 @@ bool ASonoTraceUEActor::AddActor(AActor* Actor, const bool OverrideInitializatio
 		if (!CurrentSuccess)
 			ReturnValue = false;
 	}
+	TArray<ULandscapeComponent*> LandscapeComponents;
+	Actor->GetComponents<ULandscapeComponent>(LandscapeComponents, true);
+	for (ULandscapeComponent* LandscapeComp : LandscapeComponents)
+	{
+		const bool CurrentSuccess = AddLandscapeComponent(LandscapeComp, ActorName, OverrideInitialization, false);
+		if (!CurrentSuccess)
+			ReturnValue = false;
+	}
 	if (UpdateTable) UpdateScenePrimitiveIndexToPersistentPrimitiveIndexTable();
 	return ReturnValue;
+}
+
+bool ASonoTraceUEActor::AddLandscapeComponent(ULandscapeComponent* LandscapeComponent, FString ObjectNamePrefix, const bool OverrideInitialization, const bool UpdateTable)
+{
+	if (!Initialized && !OverrideInitialization)
+		return false;
+	if (!LandscapeComponent || !LandscapeComponent->SceneProxy)
+		return false;
+
+	const int32 ScenePrimitiveIndex = LandscapeComponent->SceneProxy->GetPrimitiveSceneInfo()->GetIndex();
+	if (ScenePrimitiveIndex == -1)
+		return false;
+
+	const int32 PersistentPrimitiveIndex = LandscapeComponent->SceneProxy->GetPrimitiveSceneInfo()->GetPersistentIndex().Index;
+	if (PersistentPrimitiveIndexToLabelsAndObjectTypes.Contains(PersistentPrimitiveIndex))
+	{
+		if (UpdateTable) UpdateScenePrimitiveIndexToPersistentPrimitiveIndexTable();
+		return false;
+	}
+
+	// Landscape components have no StaticMesh asset, so per-triangle curvature/BRDF/material data
+	// (which requires DynamicMesh conversion of a UStaticMesh) can't be generated for them - same
+	// limitation as Nanite meshes. Register with Object Type 0's defaults instead of leaving this to
+	// fall through the runtime "unknown object" path.
+	const FSonoTraceUEObjectSettingsStruct* ObjectSettings = &GeneratedSettings.ObjectSettings[0];
+	const FName Label = FName(ObjectNamePrefix + TEXT("_") + LandscapeComponent->GetName());
+	UE_LOG(SonoTraceUE, Warning, TEXT("SKIPPED: Landscape component '%s' has no per-triangle mesh data support. Default acoustic properties from ObjectSettings '%s' will be used for all hits on this object instead."),
+		   *LandscapeComponent->GetName(), *ObjectSettings->Name.ToString());
+
+	PersistentPrimitiveIndexToPrimitiveComponent.Add(PersistentPrimitiveIndex, LandscapeComponent);
+	ScenePrimitiveIndexToPersistentPrimitiveIndex.Add(ScenePrimitiveIndex, PersistentPrimitiveIndex);
+	PersistentPrimitiveIndexToLabelsAndObjectTypes.Add(PersistentPrimitiveIndex, TTuple<FName, int32>(Label, 0));
+	if (UpdateTable) UpdateScenePrimitiveIndexToPersistentPrimitiveIndexTable();
+	return true;
 }
 
 bool ASonoTraceUEActor::AddStaticMeshComponent(UStaticMeshComponent* MeshComponent, FString ObjectNamePrefix, const bool OverrideInitialization, const bool UpdateTable, const bool OverrideAddingToLoadList, const int32 PreviousAttempts)
@@ -435,7 +482,13 @@ bool ASonoTraceUEActor::RemoveStaticMeshComponent(UStaticMeshComponent* MeshComp
 				if (StaticMeshCounter.FindChecked(StaticMesh) == 1)
 				{
 					StaticMeshCounter.Remove(StaticMesh);
-					MeshData.RemoveAt(StaticMeshToMeshDataIndex.FindChecked(StaticMesh));
+					// Intentionally not removing the entry from MeshData: TArray::RemoveAt shifts every
+					// subsequent element down by one, which would silently invalidate every other mesh's
+					// cached index into MeshData (PersistentPrimitiveIndexToMeshDataIndex / *ToMeshDataIndex)
+					// that pointed past this one - causing them to read a different mesh's triangle data
+					// (and hence bogus out-of-bounds triangle indices) after any later removal. The orphaned
+					// slot is harmless; only the asset->index cache needs clearing so re-adding this asset
+					// later generates fresh data at a new index instead of reusing the stale slot.
 					StaticMeshToMeshDataIndex.Remove(StaticMesh);
 					UE_LOG(SonoTraceUE, Log, TEXT("Removed StaticMesh '%s' mesh data."), *StaticMesh->GetName());
 				}
@@ -472,7 +525,9 @@ bool ASonoTraceUEActor::RemoveSkeletalMeshComponent(USkeletalMeshComponent* Mesh
 				if (SkeletalMeshCounter.FindChecked(SkeletalMesh) == 1)
 				{
 					SkeletalMeshCounter.Remove(SkeletalMesh);
-					MeshData.RemoveAt(SkeletalMeshToMeshDataIndex.FindChecked(SkeletalMesh));
+					// See the matching comment in RemoveStaticMeshComponent: intentionally not removing the
+					// entry from MeshData, since RemoveAt would shift and invalidate every other mesh's
+					// cached MeshData index.
 					SkeletalMeshToMeshDataIndex.Remove(SkeletalMesh);
 					UE_LOG(SonoTraceUE, Log, TEXT("Removed SkeletalMesh '%s' mesh data."), *SkeletalMesh->GetName());
 				}
@@ -1494,9 +1549,13 @@ void ASonoTraceUEActor::ParseRayTracing()
 
 					// Get the render scene to later find unknown objects
 					FScene* RenderScene = GetWorld()->Scene->GetRenderScene();
-				
+
+					// TEMP DEBUG: counts how many hits landed on each registered object this trace, so we can
+					// see which objects are/aren't being hit at all. Remove once ray tracing is confirmed working.
+					TMap<int32, int32> DebugHitCountPerPersistentPrimitiveIndex;
+
 					// Loop the rays
-					int32 SavedPointIndex = 0;					
+					int32 SavedPointIndex = 0;
 					for (int32 RayIndex = 0; RayIndex < GeneratedSettings.AzimuthAngles.Num(); RayIndex++)
 					{
 						// Start multi-bounce loop
@@ -1592,6 +1651,7 @@ void ASonoTraceUEActor::ParseRayTracing()
 										}
 									}
 									RayTracingSubOutput.HitPersistentPrimitiveIndexes.AddUnique(CurrentPersistentPrimitiveIndex);
+									DebugHitCountPerPersistentPrimitiveIndex.FindOrAdd(CurrentPersistentPrimitiveIndex)++;
 									if (PersistentPrimitiveIndexToMeshDataIndex.Contains(CurrentPersistentPrimitiveIndex))
 									{
 										const int32 MeshDataIndex = PersistentPrimitiveIndexToMeshDataIndex[CurrentPersistentPrimitiveIndex];
@@ -1676,7 +1736,21 @@ void ASonoTraceUEActor::ParseRayTracing()
 					}
 					// Remove the remaining part of the struct.
 					RayTracingSubOutput.ReflectedPoints.RemoveAt(SavedPointIndex, RayTracingSubOutput.ReflectedPoints.Num() - SavedPointIndex);
-				}				
+
+					// TEMP DEBUG: dump every registered object and how many hits (if any) it got this trace.
+					{
+						UE_LOG(SonoTraceUE, Warning, TEXT("[DEBUG] Hit summary for this trace (%d registered objects):"), PersistentPrimitiveIndexToLabelsAndObjectTypes.Num());
+						for (const auto& Entry : PersistentPrimitiveIndexToLabelsAndObjectTypes)
+						{
+							const int32 PPI = Entry.Key;
+							const FName ObjectName = Entry.Value.Get<0>();
+							const int32 HitCount = DebugHitCountPerPersistentPrimitiveIndex.Contains(PPI) ? DebugHitCountPerPersistentPrimitiveIndex[PPI] : 0;
+							const bool bHasMeshData = PersistentPrimitiveIndexToMeshDataIndex.Contains(PPI);
+							UE_LOG(SonoTraceUE, Warning, TEXT("[DEBUG]   PPI #%d '%s': %d hits, HasMeshData=%s"),
+								   PPI, *ObjectName.ToString(), HitCount, bHasMeshData ? TEXT("true") : TEXT("false"));
+						}
+					}
+				}
 				// Unlock the buffer when done
 				GPUReadback->Unlock();
 
@@ -5823,7 +5897,7 @@ TArray<FSonoTraceUEObjectSettingsStruct>  ASonoTraceUEActor::PopulateObjectSetti
 
 	for (int32 FrequencyIndex = 0; FrequencyIndex < InputSettings->NumberOfSimFrequencies; ++FrequencyIndex)
 	{
-		float SurfaceBRDF = SigmoidMix(0, NewObjectSetting.BrdfTransitionSlope, SigmoidSlopeMultiplier * NewObjectSetting.BrdfTransitionPosition,
+		float SurfaceBRDF = SigmoidMix(0, SigmoidSlopeMultiplier * NewObjectSetting.BrdfTransitionSlope, NewObjectSetting.BrdfTransitionPosition,
 									   NewObjectSetting.BrdfExponentsDiffraction[FrequencyIndex], NewObjectSetting.BrdfExponentsSpecular[FrequencyIndex]);
 		float SurfaceMaterial = SigmoidMix(0, SigmoidSlopeMultiplier * NewObjectSetting.MaterialsTransitionSlope, NewObjectSetting.MaterialsTransitionPosition,
 						   NewObjectSetting.MaterialStrengthsDiffraction[FrequencyIndex], NewObjectSetting.MaterialStrengthsSpecular[FrequencyIndex]);

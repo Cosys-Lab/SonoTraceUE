@@ -1,125 +1,67 @@
-// By Wouter Jansen & Jan Steckel, Cosys-Lab, University of Antwerp. See the LICENSE file for details. 
+// By Wouter Jansen & Jan Steckel, Cosys-Lab, University of Antwerp. See the LICENSE file for details.
 
 #include "SonoTrace.h"
 #include "GlobalShader.h"
 #include "RHIDefinitions.h"
 #include "Modules/ModuleManager.h"
+#include "RenderGraphUtils.h"
 #include "../Private/ScenePrivate.h"
-#include "../Private/Nanite/NaniteRayTracing.h"
-#include "RayTracingMeshDrawCommands.h"
-#include "RayTracingPayloadType.h"
 
 #if RHI_RAYTRACING
-#define NUM_THREADS_PER_GROUP_DIMENSION 8
 
 DEFINE_LOG_CATEGORY(SonoTraceUE);
 
 // GPU Stats for profiling - shows up in 'stat gpu' and profilegpu
 DECLARE_GPU_STAT_NAMED(SonoTraceRayTracing, TEXT("SonoTrace RayTracing"));
 
-class FSonoTraceRGS : public FGlobalShader
+// Inline ray tracing (RayQuery/TraceRayInline) dispatched from an ordinary compute shader - this is the
+// pattern used by Lumen, MegaLights and the engine's own RayTracingDebug view modes. Unlike the old RTPSO
+// approach, there is no Shader Binding Table to build and no closest-hit/miss shader binding step: every TLAS
+// instance in the scene is reachable through a single TraceRayInline() call, so there is no risk of geometry
+// being left unbound (which under RTPSO caused missing/incorrect hits for Landscape, skeletal meshes, and
+// intermittently even static meshes, since View.VisibleRayTracingShaderBindings only covers what the main
+// renderer's own effects consider relevant that frame).
+class FSonoTraceCS : public FGlobalShader
 {
-	DECLARE_GLOBAL_SHADER(FSonoTraceRGS)
-	SHADER_USE_ROOT_PARAMETER_STRUCT(FSonoTraceRGS, FGlobalShader)
+	DECLARE_GLOBAL_SHADER(FSonoTraceCS)
+	SHADER_USE_PARAMETER_STRUCT(FSonoTraceCS, FGlobalShader)
 
 	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
-		SHADER_PARAMETER_SRV(RaytracingAccelerationStructure, TLAS)
+		SHADER_PARAMETER_RDG_BUFFER_SRV(RaytracingAccelerationStructure, TLAS)
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer, RayTracingSceneMetadata)
 		SHADER_PARAMETER_STRUCT_REF(FViewUniformShaderParameters, ViewUniformBuffer)
 		SHADER_PARAMETER_RDG_UNIFORM_BUFFER(FSceneUniformParameters, SceneUniformBuffer)
 		SHADER_PARAMETER(uint32, MaxBounces)
 		SHADER_PARAMETER(uint32, EmitterCount)
 		SHADER_PARAMETER(uint32, DistributionRayCount)
+		SHADER_PARAMETER(uint32, TotalRayCount)
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float>, AzimuthAnglesBuffer)
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float>, ElevationAnglesBuffer)
-	    SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float>, SensorConfigurationBuffer)
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float>, SensorConfigurationBuffer)
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<FStructuredOutputBufferElem>, OutputBuffer)
 	END_SHADER_PARAMETER_STRUCT()
 
 	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
 	{
-		return ShouldCompileRayTracingShadersForProject(Parameters.Platform);
-	}
-
-	static ERayTracingPayloadType GetRayTracingPayloadType(const int32 PermutationId)
-	{
-		return ERayTracingPayloadType::RayTracingDebug;
-	}
-	
-	static inline void ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment)
-	{
-		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
-
-		OutEnvironment.SetDefine(TEXT("THREADGROUPSIZE_X"), NUM_THREADS_PER_GROUP_DIMENSION);
-		OutEnvironment.SetDefine(TEXT("THREADGROUPSIZE_Y"), NUM_THREADS_PER_GROUP_DIMENSION);
-		OutEnvironment.SetDefine(TEXT("THREADGROUPSIZE_Z"), NUM_THREADS_PER_GROUP_DIMENSION);
-	}
-};
-IMPLEMENT_GLOBAL_SHADER(FSonoTraceRGS, "/Plugin/SonoTraceUE/private/SonoTrace.usf", "SonoTraceRGS", SF_RayGen);
-
-class FSonoTraceCHS : public FGlobalShader
-{
-	DECLARE_GLOBAL_SHADER(FSonoTraceCHS);
-
-public:
-
-	FSonoTraceCHS() = default;
-	FSonoTraceCHS(const ShaderMetaType::CompiledShaderInitializerType& Initializer)
-		: FGlobalShader(Initializer)
-	{}
-
-	class FNaniteRayTracing : SHADER_PERMUTATION_BOOL("NANITE_RAY_TRACING");
-	using FPermutationDomain = TShaderPermutationDomain<FNaniteRayTracing>;
-
-	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
-	{
-		return ShouldCompileRayTracingShadersForProject(Parameters.Platform);
+		return IsRayTracingEnabledForProject(Parameters.Platform) && FDataDrivenShaderPlatformInfo::GetSupportsInlineRayTracing(Parameters.Platform);
 	}
 
 	static void ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment)
 	{
 		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
 
-		FPermutationDomain PermutationVector(Parameters.PermutationId);
-		if (PermutationVector.Get<FNaniteRayTracing>())
-		{
-			OutEnvironment.SetDefine(TEXT("VF_SUPPORTS_PRIMITIVE_SCENE_DATA"), 1);
-		}
+		// Current inline ray tracing implementation requires a 1:1 mapping between thread groups and waves,
+		// and only supports Wave32 mode.
+		OutEnvironment.CompilerFlags.Add(CFLAG_Wave32);
+		OutEnvironment.CompilerFlags.Add(CFLAG_InlineRayTracing);
+
+		// Needed to resolve Nanite ray tracing proxy geometry through GetInstanceSceneData()/vertex fetch.
+		OutEnvironment.SetDefine(TEXT("VF_SUPPORTS_PRIMITIVE_SCENE_DATA"), 1);
 	}
 
-	static ERayTracingPayloadType GetRayTracingPayloadType(const int32 PermutationId)
-	{
-		return ERayTracingPayloadType::RayTracingDebug;
-	}
+	static constexpr uint32 ThreadGroupSize = 32;
 };
-IMPLEMENT_GLOBAL_SHADER(FSonoTraceCHS, "/Plugin/SonoTraceUE/private/SonoTrace.usf", "closesthit=SonoTraceCHS", SF_RayHitGroup);
-
-class FSonoTraceMS : public FGlobalShader
-{
-	DECLARE_GLOBAL_SHADER(FSonoTraceMS);
-
-	static void ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment)
-	{
-		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
-	}
-
-public:
-
-	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
-	{
-		return ShouldCompileRayTracingShadersForProject(Parameters.Platform);
-	}
-
-	FSonoTraceMS() = default;
-	FSonoTraceMS(const ShaderMetaType::CompiledShaderInitializerType& Initializer)
-		: FGlobalShader(Initializer)
-	{}
-
-	static ERayTracingPayloadType GetRayTracingPayloadType(const int32 PermutationId)
-	{
-		return ERayTracingPayloadType::RayTracingDebug;
-	}
-};
-IMPLEMENT_GLOBAL_SHADER(FSonoTraceMS, "/Plugin/SonoTraceUE/private/SonoTrace.usf", "SonoTraceMS", SF_RayMiss);
+IMPLEMENT_GLOBAL_SHADER(FSonoTraceCS, "/Plugin/SonoTraceUE/private/SonoTrace.usf", "SonoTraceCS", SF_Compute);
 
 FSonoTrace::FSonoTrace()
 {
@@ -169,105 +111,20 @@ void FSonoTrace::UpdateParameters(const FSonoTraceParameters& InputParameters)
 	bCachedParamsAreValid = true;
 }
 
-void FSonoTrace::BindSonoTraceCHSBindings(FRHICommandList& RHICmdList, const FViewInfo& View, const FRayTracingMeshCommandStorage& RayTracingMeshCommands, FRHIShaderBindingTable* SBT, FRHIUniformBuffer* SceneUniformBuffer, FRayTracingPipelineState* PipelineState)
-{
-	FSceneRenderingBulkObjectAllocator Allocator;
-
-	auto Alloc = [&](uint32 Size, uint32 Align)
-	{
-		return RHICmdList.Bypass()
-			? Allocator.Malloc(Size, Align)
-			: RHICmdList.Alloc(Size, Align);
-	};
-
-	const int32 NumTotalBindings = View.VisibleRayTracingShaderBindings.Num();
-	const uint32 MergedBindingsSize = sizeof(FRayTracingLocalShaderBindings) * NumTotalBindings;
-	FRayTracingLocalShaderBindings* Bindings = (FRayTracingLocalShaderBindings*)Alloc(MergedBindingsSize, alignof(FRayTracingLocalShaderBindings));
-
-	struct FBinding
-	{
-		int32 ShaderIndexInPipeline;
-		uint32 NumUniformBuffers;
-		FRHIUniformBuffer** UniformBufferArray;
-	};
-
-	auto SetupBinding = [&](FSonoTraceCHS::FPermutationDomain PermutationVector)
-	{
-		auto Shader = View.ShaderMap->GetShader<FSonoTraceCHS>(PermutationVector);
-		auto HitGroupShader = Shader.GetRayTracingShader();
-
-		FBinding Binding;
-		Binding.ShaderIndexInPipeline = FindRayTracingHitGroupIndex(PipelineState, HitGroupShader, true);
-		Binding.NumUniformBuffers = Shader->ParameterMapInfo.UniformBuffers.Num();
-		Binding.UniformBufferArray = (FRHIUniformBuffer**)Alloc(sizeof(FRHIUniformBuffer*) * Binding.NumUniformBuffers, alignof(FRHIUniformBuffer*));
-
-		const auto& ViewUniformBufferParameter = Shader->GetUniformBufferParameter<FViewUniformShaderParameters>();
-		const auto& SceneUniformBufferParameter = Shader->GetUniformBufferParameter<FSceneUniformParameters>();
-
-		if (ViewUniformBufferParameter.IsBound())
-		{
-			check(ViewUniformBufferParameter.GetBaseIndex() < Binding.NumUniformBuffers);
-			Binding.UniformBufferArray[ViewUniformBufferParameter.GetBaseIndex()] = View.ViewUniformBuffer.GetReference();
-		}
-
-		if (SceneUniformBufferParameter.IsBound())
-		{
-			check(SceneUniformBufferParameter.GetBaseIndex() < Binding.NumUniformBuffers);
-			Binding.UniformBufferArray[SceneUniformBufferParameter.GetBaseIndex()] = SceneUniformBuffer;
-		}
-
-		return Binding;
-	};
-
-	FSonoTraceCHS::FPermutationDomain PermutationVector;
-
-	PermutationVector.Set<FSonoTraceCHS::FNaniteRayTracing>(false);
-	FBinding ShaderBinding = SetupBinding(PermutationVector);
-
-	PermutationVector.Set<FSonoTraceCHS::FNaniteRayTracing>(true);
-	FBinding ShaderBindingNaniteRT = SetupBinding(PermutationVector);
-
-	uint32 BindingIndex = 0;
-	for (const FRayTracingShaderBindingData& VisibleShaderBinding : View.VisibleRayTracingShaderBindings)
-	{
-		const FRayTracingMeshCommand& MeshCommand = VisibleShaderBinding.GetRayTracingMeshCommand(RayTracingMeshCommands);
-
-		const FBinding& HelperBinding = MeshCommand.IsUsingNaniteRayTracing() ? ShaderBindingNaniteRT : ShaderBinding;
-
-		FRayTracingLocalShaderBindings Binding = {};
-		Binding.ShaderIndexInPipeline = HelperBinding.ShaderIndexInPipeline;
-		Binding.RecordIndex = VisibleShaderBinding.SBTRecordIndex;
-		Binding.Geometry = VisibleShaderBinding.RayTracingGeometry;
-		Binding.SegmentIndex = MeshCommand.GeometrySegmentIndex;
-		Binding.UniformBuffers = HelperBinding.UniformBufferArray;
-		Binding.NumUniformBuffers = HelperBinding.NumUniformBuffers;
-
-		Bindings[BindingIndex] = Binding;
-		BindingIndex++;
-	}
-	constexpr bool bCopyDataToInlineStorage = false;
-	RHICmdList.SetRayTracingHitGroups(
-		SBT,
-		PipelineState,
-		NumTotalBindings, Bindings,
-		bCopyDataToInlineStorage);
-}
-
-
 // Delegate Handles
 void FSonoTrace::Execute_RenderThread(FPostOpaqueRenderParameters& Parameters)
 {
 	if (!CachedParams.Scene || !CachedParams.Scene->RayTracingScene.IsCreated()) return;
 
 	FRDGBuilder* GraphBuilder = Parameters.GraphBuilder;
-	
+
 	//If there are no cached parameters to use, skip
 	//If no Render Target is supplied in the cachedParams, skip
 	if (!bCachedParamsAreValid)
 	{
 		return;
 	}
-	
+
 	//Render Thread Assertion
 	check(IsInRenderingThread());
 
@@ -290,45 +147,28 @@ void FSonoTrace::Execute_RenderThread(FPostOpaqueRenderParameters& Parameters)
 	ExecutionCounter += 1;
 	CurrentTimestamp = FDateTime::Now().ToUnixTimestamp();
 
-	// Setup RGS
-	const FGlobalShaderMap* ShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
-	auto RayGenShader = ShaderMap->GetShader<FSonoTraceRGS>();
-	const bool bIsShaderValid = RayGenShader.IsValid();
-	if (!bIsShaderValid)
+	// Setup CS
+	const TShaderRef<FSonoTraceCS> ComputeShader = Parameters.View->ShaderMap->GetShader<FSonoTraceCS>();
+	if (!ComputeShader.IsValid())
 		return;
 
-	// Setup pipeline
-	FRayTracingPipelineStateInitializer Initializer;
-	Initializer.MaxPayloadSizeInBytes = GetRayTracingPayloadTypeMaxSize(ERayTracingPayloadType::RayTracingDebug);
-
-	FRHIRayTracingShader* RayGenShaderTable[] = { RayGenShader.GetRayTracingShader() };
-	Initializer.SetRayGenShaderTable(RayGenShaderTable);
-
-	FSonoTraceCHS::FPermutationDomain PermutationVectorCHS;
-
-	PermutationVectorCHS.Set<FSonoTraceCHS::FNaniteRayTracing>(false);
-	const auto HitGroupShader = Parameters.View->ShaderMap->GetShader<FSonoTraceCHS>(PermutationVectorCHS);
-
-	PermutationVectorCHS.Set<FSonoTraceCHS::FNaniteRayTracing>(true);
-	const auto HitGroupShaderNaniteRT = Parameters.View->ShaderMap->GetShader<FSonoTraceCHS>(PermutationVectorCHS);
-
-	FRHIRayTracingShader* HitGroupTable[] = { HitGroupShader.GetRayTracingShader(), HitGroupShaderNaniteRT.GetRayTracingShader()};
-	Initializer.SetHitGroupTable(HitGroupTable);
-	// Hit-group indexing is now configured on the Shader Binding Table itself (see ERayTracingHitGroupIndexingMode::Allow below).
-
-	const auto MissShader = ShaderMap->GetShader<FSonoTraceMS>();
-	FRHIRayTracingShader* MissTable[] = { MissShader.GetRayTracingShader() };
-	Initializer.SetMissShaderTable(MissTable);
-
-	FRayTracingPipelineState* Pipeline = PipelineStateCache::GetAndOrCreateRayTracingPipelineState(GraphBuilder->RHICmdList, Initializer);
+	const FRayTracingScene::FViewHandle& ViewHandle = Parameters.View->GetRayTracingSceneViewHandle();
+	const FRDGBufferSRVRef LayerView = CachedParams.Scene->RayTracingScene.GetLayerView(ERayTracingSceneLayer::Base, ViewHandle);
+	if (!LayerView)
+		return;
 
 	// Set shader parameters
-	FSonoTraceRGS::FParameters* PassParameters = GraphBuilder->AllocParameters<FSonoTraceRGS::FParameters>();	
+	FSonoTraceCS::FParameters* PassParameters = GraphBuilder->AllocParameters<FSonoTraceCS::FParameters>();
+	PassParameters->TLAS = LayerView;
 	PassParameters->ViewUniformBuffer = Parameters.View->ViewUniformBuffer;
+	PassParameters->SceneUniformBuffer = GetSceneUniformBufferRef(*GraphBuilder, *Parameters.View);
+	// Only actually read on platforms where PLATFORM_SUPPORTS_INLINE_RAY_TRACING_TRIANGLE_NORMALS is 0 (e.g.
+	// D3D12); nullable since the buffer is only populated when the engine has an inline ray tracing pass
+	// enabled elsewhere this frame.
+	PassParameters->RayTracingSceneMetadata = Parameters.View->InlineRayTracingBindingDataBuffer ? GraphBuilder->CreateSRV(Parameters.View->InlineRayTracingBindingDataBuffer) : nullptr;
 	PassParameters->MaxBounces = CachedParams.MaxBounces;
 	PassParameters->EmitterCount = CachedParams.EmitterCount;
 	PassParameters->DistributionRayCount = CachedParams.NumDistributionRays;
-	PassParameters->SceneUniformBuffer = GetSceneUniformBufferRef(*GraphBuilder, *Parameters.View);
 
 	// Set up all angles and figure out counts
 	uint32 NumOfRays = CachedParams.NumDistributionRays;
@@ -341,7 +181,8 @@ void FSonoTrace::Execute_RenderThread(FPostOpaqueRenderParameters& Parameters)
 		AzimuthAngles.Append(CachedParams.DirectPathAzimuthAngles);
 		ElevationAngles.Append(CachedParams.DirectPathElevationAngles);
 	}
-	const uint32 NumOutput = NumOfRays * CachedParams.MaxBounces;	
+	PassParameters->TotalRayCount = NumOfRays;
+	const uint32 NumOutput = NumOfRays * CachedParams.MaxBounces;
 	AzimuthAnglesBufferRef = CreateStructuredBuffer(
 		*GraphBuilder,
 		TEXT("AzimuthAnglesInputBuffer"),
@@ -396,41 +237,16 @@ void FSonoTrace::Execute_RenderThread(FPostOpaqueRenderParameters& Parameters)
 	ERDGInitialDataFlags::None);
 	PassParameters->OutputBuffer = GraphBuilder->CreateUAV(StructuredOutputBufferRef, PF_Unknown);
 
-	// Allocate a transient Shader Binding Table for this frame's dispatch. The SBT is decoupled from the
-	// TLAS/FRHIRayTracingScene as of UE 5.8 - dispatch and hit-group binding calls now target the SBT directly.
-	const FShaderBindingTableRHIRef SBT = CachedParams.Scene->RayTracingSBT.AllocateTransientRHI(
-		GraphBuilder->RHICmdList,
-		ERayTracingShaderBindingMode::RTPSO,
-		ERayTracingHitGroupIndexingMode::Allow,
-		Initializer.GetMaxLocalBindingDataSize());
-
 	// Add GPU stat scope for profiling (shows in 'stat gpu' and 'profilegpu')
 	RDG_EVENT_SCOPE_STAT(*GraphBuilder, SonoTraceRayTracing, "SonoTrace RayTracing");
 
-	// Add the ray trace dispatch pass
-	GraphBuilder->AddPass(
+	FComputeShaderUtils::AddPass(
+		*GraphBuilder,
 		RDG_EVENT_NAME("SonoTrace"),
+		ComputeShader,
 		PassParameters,
-		ERDGPassFlags::Compute,
-		[PassParameters, RayGenShader, SBT, Pipeline, Parameters, NumOfRays, this](FRHICommandList& RHICmdList)
-		{
-			const FRayTracingScene::FViewHandle& ViewHandle = Parameters.View->GetRayTracingSceneViewHandle();
-			const FRDGBufferSRVRef LayerView = CachedParams.Scene->RayTracingScene.GetLayerView(ERayTracingSceneLayer::Base, ViewHandle);
-			if (LayerView) {
-				PassParameters->TLAS = LayerView->GetRHI();
+		FComputeShaderUtils::GetGroupCount(NumOfRays, FSonoTraceCS::ThreadGroupSize));
 
-				FRHIBatchedShaderParameters& GlobalResources = RHICmdList.GetScratchShaderParameters();
-				SetShaderParameters(GlobalResources, RayGenShader, *PassParameters);
-
-				BindSonoTraceCHSBindings(RHICmdList, *Parameters.View, CachedParams.Scene->CachedRayTracingMeshCommands, SBT, PassParameters->SceneUniformBuffer->GetRHI(), Pipeline);
-
-				RHICmdList.SetRayTracingMissShader(SBT, 0, Pipeline, 0 /* ShaderIndexInPipeline */, 0, nullptr, 0);
-				RHICmdList.CommitShaderBindingTable(SBT);
-
-				RHICmdList.RayTraceDispatch(Pipeline, RayGenShader.GetRayTracingShader(), SBT, GlobalResources, NumOfRays, 1);
-			}
-		}
-	);
 	AddEnqueueCopyPass(*GraphBuilder, CachedParams.GPUReadback, StructuredOutputBufferRef, NumOutput * sizeof(FStructuredOutputBufferElem));
 
 	RunState = 2;
