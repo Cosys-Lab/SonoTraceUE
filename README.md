@@ -109,11 +109,6 @@ To define the BRDF properties of objects one can use our custom `DataTable` stru
 
 all other objects will use the default settings as set in the Input Settings.
 
-### Known Limitations: Nanite meshes
-
-Per-triangle acoustic properties (curvature, BRDF, material) are computed by converting each object's 3d asset. For **Nanite-enabled meshes**, the triangle index ray tracing reports does not correspond to this converted triangulation, so per-triangle lookups can land out of bounds, this includes Landscape actors, whose Nanite mesh proxy is always Nanite-enabled. The plugin detects this automatically: any mesh with Nanite enabled has mesh-data generation skipped entirely, the same as manually enabling `DisableMeshDataGeneration` for it in the `ObjectSettingsDataTable` (see [Creating new object settings](#creating-new-object-settings)), all hits on that object use the object type's default acoustic properties instead, with no per-hit warning spam. This also covers Landscape actors automatically, since their Nanite proxy mesh isn't a selectable asset in the Content Browser and can't be added to the settings table manually.
-If you still see `Mesh data triangle index out of bounds` warnings for a mesh that is **not** Nanite-enabled, that's likely a separate issue possibly related to LOD selection or multi-material-slot geometry segments.
-
 ## SonoTraceUE Actor
 
 The primary actor class that manages the entire acoustic simulation pipeline. This section will go over its properties and functions.
