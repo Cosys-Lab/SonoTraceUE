@@ -25,9 +25,6 @@ struct FStructuredOutputBufferElem
 };
 
 RaytracingAccelerationStructure TLAS;
-// Only actually read on platforms where PLATFORM_SUPPORTS_INLINE_RAY_TRACING_TRIANGLE_NORMALS is 0 (e.g. D3D12),
-// where reconstructing a geometric normal from inline ray tracing requires a bindless index/vertex buffer
-// lookup through this engine-provided metadata buffer instead of RayQuery exposing it directly.
 StructuredBuffer<FRayTracingSceneMetadataRecord> RayTracingSceneMetadata;
 uint MaxBounces;
 uint EmitterCount;
@@ -38,10 +35,6 @@ RWStructuredBuffer<float1> ElevationAnglesBuffer;
 RWStructuredBuffer<float1> SensorConfigurationBuffer;
 RWStructuredBuffer<FStructuredOutputBufferElem> OutputBuffer;
 
-// Resolves the world-space geometric (flat, per-triangle) normal for an inline ray tracing hit. This is the
-// inline-ray-tracing equivalent of GetGeometryNormalFromTriangleBaseAttributes() used in a closest-hit shader -
-// same underlying triangle-edge-cross-product math, just fed by a bindless metadata lookup (on platforms that
-// need it) instead of the closest-hit shader's local root signature bindings.
 float3 GetSonoTraceWorldNormal(FTraceRayInlineResult TraceResult)
 {
 #if PLATFORM_SUPPORTS_INLINE_RAY_TRACING_TRIANGLE_NORMALS
@@ -84,10 +77,6 @@ bool TraceSonoTraceRay(float3 Origin, float3 Direction, float TMax, uint RayFlag
 		OutWorldNormal = GetSonoTraceWorldNormal(Result);
 		OutTriangleIndex = Result.PrimitiveIndex;
 
-		// GetInstanceUserData()/InstanceID() returns a GPU Scene instance data offset, not a scene primitive
-		// index directly - resolve it through GetInstanceSceneData() to get the actual scene primitive index
-		// (FPrimitiveSceneInfo index into FScene::Primitives), which is what the CPU side looks up via
-		// RenderScene->Primitives[...].
 		const FInstanceSceneData InstanceSceneData = GetInstanceSceneData(Result.InstanceID);
 		OutInstanceId = InstanceSceneData.PrimitiveId;
 		return true;

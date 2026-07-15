@@ -14,13 +14,6 @@ DEFINE_LOG_CATEGORY(SonoTraceUE);
 // GPU Stats for profiling - shows up in 'stat gpu' and profilegpu
 DECLARE_GPU_STAT_NAMED(SonoTraceRayTracing, TEXT("SonoTrace RayTracing"));
 
-// Inline ray tracing (RayQuery/TraceRayInline) dispatched from an ordinary compute shader - this is the
-// pattern used by Lumen, MegaLights and the engine's own RayTracingDebug view modes. Unlike the old RTPSO
-// approach, there is no Shader Binding Table to build and no closest-hit/miss shader binding step: every TLAS
-// instance in the scene is reachable through a single TraceRayInline() call, so there is no risk of geometry
-// being left unbound (which under RTPSO caused missing/incorrect hits for Landscape, skeletal meshes, and
-// intermittently even static meshes, since View.VisibleRayTracingShaderBindings only covers what the main
-// renderer's own effects consider relevant that frame).
 class FSonoTraceCS : public FGlobalShader
 {
 	DECLARE_GLOBAL_SHADER(FSonoTraceCS)
@@ -162,8 +155,7 @@ void FSonoTrace::Execute_RenderThread(FPostOpaqueRenderParameters& Parameters)
 	PassParameters->TLAS = LayerView;
 	PassParameters->ViewUniformBuffer = Parameters.View->ViewUniformBuffer;
 	PassParameters->SceneUniformBuffer = GetSceneUniformBufferRef(*GraphBuilder, *Parameters.View);
-	// Only actually read on platforms where PLATFORM_SUPPORTS_INLINE_RAY_TRACING_TRIANGLE_NORMALS is 0 (e.g.
-	// D3D12); nullable since the buffer is only populated when the engine has an inline ray tracing pass
+	// Only actually read on platforms where PLATFORM_SUPPORTS_INLINE_RAY_TRACING_TRIANGLE_NORMALS is 0 (e.g. D3D12); nullable since the buffer is only populated when the engine has an inline ray tracing pass
 	// enabled elsewhere this frame.
 	PassParameters->RayTracingSceneMetadata = Parameters.View->InlineRayTracingBindingDataBuffer ? GraphBuilder->CreateSRV(Parameters.View->InlineRayTracingBindingDataBuffer) : nullptr;
 	PassParameters->MaxBounces = CachedParams.MaxBounces;

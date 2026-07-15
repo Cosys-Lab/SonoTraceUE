@@ -200,10 +200,8 @@ bool ASonoTraceUEActor::AddLandscapeComponent(ULandscapeComponent* LandscapeComp
 		return false;
 	}
 
-	// Landscape components have no StaticMesh asset, so per-triangle curvature/BRDF/material data
-	// (which requires DynamicMesh conversion of a UStaticMesh) can't be generated for them - same
-	// limitation as Nanite meshes. Register with Object Type 0's defaults instead of leaving this to
-	// fall through the runtime "unknown object" path.
+	// Landscape components have no StaticMesh asset, so per-triangle curvature/BRDF/material data can't be generated for them.
+	// Register with Object Type 0's defaults instead of leaving this to fall through the runtime "unknown object" path.
 	const FSonoTraceUEObjectSettingsStruct* ObjectSettings = &GeneratedSettings.ObjectSettings[0];
 	const FName Label = FName(ObjectNamePrefix + TEXT("_") + LandscapeComponent->GetName());
 	UE_LOG(SonoTraceUE, Warning, TEXT("SKIPPED: Landscape component '%s' has no per-triangle mesh data support. Default acoustic properties from ObjectSettings '%s' will be used for all hits on this object instead."),
@@ -258,24 +256,7 @@ bool ASonoTraceUEActor::AddStaticMeshComponent(UStaticMeshComponent* MeshCompone
 						if (UpdateTable) UpdateScenePrimitiveIndexToPersistentPrimitiveIndexTable();
 						return true;
 					}
-
-					if (StaticMesh->IsNaniteEnabled())
-					{
-						// Nanite ray tracing hits report triangle indices from the Nanite BVH/cluster representation,
-						// which do not correspond 1:1 to the triangulation this plugin's DynamicMesh conversion sees.
-						// Per-triangle curvature/BRDF/material data would be silently wrong or out-of-bounds for
-						// Nanite meshes, so skip generating it and always fall back to this object's defaults instead.
-						FName MeshName = FName(StaticMesh->GetName());
-						SkippedMeshesDueToTriangleCount.Add(MeshName, -1);
-						UE_LOG(SonoTraceUE, Warning, TEXT("SKIPPED: StaticMesh '%s' has Nanite enabled. Per-triangle curvature/BRDF/material data is not supported for Nanite meshes; default acoustic properties from ObjectSettings '%s' will be used for all hits on this mesh instead."),
-							   *StaticMesh->GetName(), *ObjectSettings->Name.ToString());
-						PersistentPrimitiveIndexToPrimitiveComponent.Add(PersistentPrimitiveIndex, MeshComponent);
-						ScenePrimitiveIndexToPersistentPrimitiveIndex.Add(ScenePrimitiveIndex, PersistentPrimitiveIndex);
-						PersistentPrimitiveIndexToLabelsAndObjectTypes.Add(PersistentPrimitiveIndex, TTuple<FName, int32>(Label, ObjectTypeIndex));
-						if (UpdateTable) UpdateScenePrimitiveIndexToPersistentPrimitiveIndexTable();
-						return true;
-					}
-
+					
 					if (InputSettings->MeshDataGenerationTriangleMaximum > 0)
 					{
 						const int32 TriangleCount = GetMeshComponentTriangleCount(MeshComponent);
@@ -334,6 +315,7 @@ bool ASonoTraceUEActor::AddStaticMeshComponent(UStaticMeshComponent* MeshCompone
 	return false;
 }
 
+// TODO: figure out skeletal nanite mesh
 bool ASonoTraceUEActor::AddSkeletalMeshComponent(USkeletalMeshComponent* MeshComponent, FString ObjectNamePrefix, const bool OverrideInitialization, const bool UpdateTable, const bool OverrideAddingToLoadList, const int32 PreviousAttempts)
 {
 	if (!Initialized && !OverrideInitialization)
@@ -482,13 +464,6 @@ bool ASonoTraceUEActor::RemoveStaticMeshComponent(UStaticMeshComponent* MeshComp
 				if (StaticMeshCounter.FindChecked(StaticMesh) == 1)
 				{
 					StaticMeshCounter.Remove(StaticMesh);
-					// Intentionally not removing the entry from MeshData: TArray::RemoveAt shifts every
-					// subsequent element down by one, which would silently invalidate every other mesh's
-					// cached index into MeshData (PersistentPrimitiveIndexToMeshDataIndex / *ToMeshDataIndex)
-					// that pointed past this one - causing them to read a different mesh's triangle data
-					// (and hence bogus out-of-bounds triangle indices) after any later removal. The orphaned
-					// slot is harmless; only the asset->index cache needs clearing so re-adding this asset
-					// later generates fresh data at a new index instead of reusing the stale slot.
 					StaticMeshToMeshDataIndex.Remove(StaticMesh);
 					UE_LOG(SonoTraceUE, Log, TEXT("Removed StaticMesh '%s' mesh data."), *StaticMesh->GetName());
 				}
@@ -525,9 +500,6 @@ bool ASonoTraceUEActor::RemoveSkeletalMeshComponent(USkeletalMeshComponent* Mesh
 				if (SkeletalMeshCounter.FindChecked(SkeletalMesh) == 1)
 				{
 					SkeletalMeshCounter.Remove(SkeletalMesh);
-					// See the matching comment in RemoveStaticMeshComponent: intentionally not removing the
-					// entry from MeshData, since RemoveAt would shift and invalidate every other mesh's
-					// cached MeshData index.
 					SkeletalMeshToMeshDataIndex.Remove(SkeletalMesh);
 					UE_LOG(SonoTraceUE, Log, TEXT("Removed SkeletalMesh '%s' mesh data."), *SkeletalMesh->GetName());
 				}
@@ -1550,10 +1522,6 @@ void ASonoTraceUEActor::ParseRayTracing()
 					// Get the render scene to later find unknown objects
 					FScene* RenderScene = GetWorld()->Scene->GetRenderScene();
 
-					// TEMP DEBUG: counts how many hits landed on each registered object this trace, so we can
-					// see which objects are/aren't being hit at all. Remove once ray tracing is confirmed working.
-					TMap<int32, int32> DebugHitCountPerPersistentPrimitiveIndex;
-
 					// Loop the rays
 					int32 SavedPointIndex = 0;
 					for (int32 RayIndex = 0; RayIndex < GeneratedSettings.AzimuthAngles.Num(); RayIndex++)
@@ -1581,11 +1549,17 @@ void ASonoTraceUEActor::ParseRayTracing()
 								// Check if it has line-of-sight to the sensor
 								if (CurrentRayTracingOutput.HitLineOfSightToSensor)
 								{
-									const int32 CurrentScenePrimitiveIndex = CurrentRayTracingOutput.HitScenePrimitiveIndex;
+									const int32 GpuPersistentPrimitiveIndex = CurrentRayTracingOutput.HitScenePrimitiveIndex;
 									const int32 CurrentTriangleIndex = CurrentRayTracingOutput.HitTriangleIndex;
-									int32 CurrentPersistentPrimitiveIndex = -1;
-									if (ScenePrimitiveIndexToPersistentPrimitiveIndex.Find(CurrentScenePrimitiveIndex))
-										CurrentPersistentPrimitiveIndex = ScenePrimitiveIndexToPersistentPrimitiveIndex[CurrentScenePrimitiveIndex];										
+
+									FPersistentPrimitiveIndex GpuPersistentIndexStruct;
+									GpuPersistentIndexStruct.Index = GpuPersistentPrimitiveIndex;
+									const int32 CurrentScenePrimitiveIndex = (RenderScene && GpuPersistentPrimitiveIndex >= 0) ? RenderScene->GetPrimitiveIndex(GpuPersistentIndexStruct) : -1;
+									const FPrimitiveSceneInfo* CurrentPrimitiveSceneInfo = (RenderScene && CurrentScenePrimitiveIndex >= 0 && CurrentScenePrimitiveIndex < RenderScene->Primitives.Num())
+										? RenderScene->Primitives[CurrentScenePrimitiveIndex]
+										: nullptr;
+									const FPrimitiveSceneProxy* CurrentPrimitiveSceneProxy = CurrentPrimitiveSceneInfo ? CurrentPrimitiveSceneInfo->Proxy : nullptr;
+									int32 CurrentPersistentPrimitiveIndex = CurrentPrimitiveSceneInfo ? CurrentPrimitiveSceneInfo->GetPersistentIndex().Index : -1;
 
 									// Compute the hit location in world space
 									FVector HitLocation = FVector(CurrentRayTracingOutput.HitPosX,
@@ -1631,27 +1605,17 @@ void ASonoTraceUEActor::ParseRayTracing()
 										TTuple<FName, int32> ObjectNameAndTypeIndex = PersistentPrimitiveIndexToLabelsAndObjectTypes.FindChecked(CurrentPersistentPrimitiveIndex);
 										ObjectName = ObjectNameAndTypeIndex.Get<0>();
 										ObjectTypeIndex = ObjectNameAndTypeIndex.Get<1>();
-									}else
+									}else if (CurrentPrimitiveSceneProxy)
 									{
-										if (RenderScene && CurrentScenePrimitiveIndex >= 0 && CurrentScenePrimitiveIndex < RenderScene->Primitives.Num())
-										{
-											if (const FPrimitiveSceneInfo* PrimitiveSceneInfo = RenderScene->Primitives[CurrentScenePrimitiveIndex])
-											{
-												if (const FPrimitiveSceneProxy* PrimitiveSceneProxy = PrimitiveSceneInfo->Proxy)
-												{
-													CurrentPersistentPrimitiveIndex = PrimitiveSceneInfo->GetPersistentIndex().Index;
-													FName NewObjectName = FName(PrimitiveSceneProxy->GetOwnerName().ToString() + TEXT("_") + PrimitiveSceneProxy->GetResourceName().ToString());
-													PersistentPrimitiveIndexToLabelsAndObjectTypes.Add(CurrentPersistentPrimitiveIndex, TTuple<FName, int32>(NewObjectName, 0));
-													ScenePrimitiveIndexToPersistentPrimitiveIndex.Add(CurrentScenePrimitiveIndex, CurrentPersistentPrimitiveIndex);
-													ObjectName = NewObjectName;
-													UE_LOG(SonoTraceUE, Log, TEXT("Added unknown object with PPI #%d, SPI #%d and label '%s' using resource '%s' and object type 'default (#0)'."),
-																					CurrentPersistentPrimitiveIndex, CurrentScenePrimitiveIndex, *NewObjectName.ToString(), *PrimitiveSceneProxy->GetResourceName().ToString());
-												}
-											}		
-										}
+										FName NewObjectName = FName(CurrentPrimitiveSceneProxy->GetOwnerName().ToString() + TEXT("_") + CurrentPrimitiveSceneProxy->GetResourceName().ToString());
+										PersistentPrimitiveIndexToLabelsAndObjectTypes.Add(CurrentPersistentPrimitiveIndex, TTuple<FName, int32>(NewObjectName, 0));
+										ScenePrimitiveIndexToPersistentPrimitiveIndex.Add(CurrentScenePrimitiveIndex, CurrentPersistentPrimitiveIndex);
+										ObjectName = NewObjectName;
+										const ERayTracingProxyType DebugProxyType = CurrentPrimitiveSceneProxy->GetRayTracingProxyType();
+										UE_LOG(SonoTraceUE, Log, TEXT("Added unknown object with PPI #%d, SPI #%d and label '%s' using resource '%s' and object type 'default (#0)'. RayTracingProxyType: %d"),
+																				CurrentPersistentPrimitiveIndex, CurrentScenePrimitiveIndex, *NewObjectName.ToString(), *CurrentPrimitiveSceneProxy->GetResourceName().ToString(), static_cast<int32>(DebugProxyType));
 									}
 									RayTracingSubOutput.HitPersistentPrimitiveIndexes.AddUnique(CurrentPersistentPrimitiveIndex);
-									DebugHitCountPerPersistentPrimitiveIndex.FindOrAdd(CurrentPersistentPrimitiveIndex)++;
 									if (PersistentPrimitiveIndexToMeshDataIndex.Contains(CurrentPersistentPrimitiveIndex))
 									{
 										const int32 MeshDataIndex = PersistentPrimitiveIndexToMeshDataIndex[CurrentPersistentPrimitiveIndex];
@@ -1736,20 +1700,7 @@ void ASonoTraceUEActor::ParseRayTracing()
 					}
 					// Remove the remaining part of the struct.
 					RayTracingSubOutput.ReflectedPoints.RemoveAt(SavedPointIndex, RayTracingSubOutput.ReflectedPoints.Num() - SavedPointIndex);
-
-					// TEMP DEBUG: dump every registered object and how many hits (if any) it got this trace.
-					{
-						UE_LOG(SonoTraceUE, Warning, TEXT("[DEBUG] Hit summary for this trace (%d registered objects):"), PersistentPrimitiveIndexToLabelsAndObjectTypes.Num());
-						for (const auto& Entry : PersistentPrimitiveIndexToLabelsAndObjectTypes)
-						{
-							const int32 PPI = Entry.Key;
-							const FName ObjectName = Entry.Value.Get<0>();
-							const int32 HitCount = DebugHitCountPerPersistentPrimitiveIndex.Contains(PPI) ? DebugHitCountPerPersistentPrimitiveIndex[PPI] : 0;
-							const bool bHasMeshData = PersistentPrimitiveIndexToMeshDataIndex.Contains(PPI);
-							UE_LOG(SonoTraceUE, Warning, TEXT("[DEBUG]   PPI #%d '%s': %d hits, HasMeshData=%s"),
-								   PPI, *ObjectName.ToString(), HitCount, bHasMeshData ? TEXT("true") : TEXT("false"));
-						}
-					}
+					
 				}
 				// Unlock the buffer when done
 				GPUReadback->Unlock();
@@ -3090,7 +3041,7 @@ void ASonoTraceUEActor::DrawSimulationResult()
 						
 						if (!Point.IsDirectPath)
 						{
-								FColor PointColor = InputSettings->DrawDefaultPointsColor;
+							FColor PointColor = InputSettings->DrawDefaultPointsColor;
 							float PointSize;		
 							int32 NormalizedValueForColor;
 							float NormalizedValueForSize; 
@@ -3098,6 +3049,8 @@ void ASonoTraceUEActor::DrawSimulationResult()
 							
 							switch (InputSettings->DrawPointsColorMode)
 							{
+							case ESonoTraceUESimulationDrawColorModeEnum::Static:
+								break;
 							case ESonoTraceUESimulationDrawColorModeEnum::SensorDistance:
 								NormalizedValueForColor = FMath::Clamp(FMath::RoundToInt(Point.DistanceToSensor / InputSettings->MaximumRayDistance * 255.0f), 0, 254);
 								PointColor = ColorMap[NormalizedValueForColor];
@@ -3119,8 +3072,6 @@ void ASonoTraceUEActor::DrawSimulationResult()
 								PointColor = ColorMap[NormalizedValueForColor];
 								break;
 							default:
-								NormalizedValueForColor = FMath::Clamp(FMath::RoundToInt(Point.SummedStrength / DrawPointsStrengthMaximumValue * 255.0f), 0, 254);
-								PointColor = ColorMap[NormalizedValueForColor];
 								break;
 							}
 
@@ -5575,10 +5526,12 @@ int32 ASonoTraceUEActor::GetMeshComponentTriangleCount(UMeshComponent* MeshCompo
 	UDynamicMesh* DynamicMesh = NewObject<UDynamicMesh>();
 	
 	static FGeometryScriptCopyMeshFromComponentOptions Options;
-	Options.bWantNormals = false;  
+	Options.bWantNormals = false;
 	Options.bWantTangents = false;
 	Options.bWantInstanceColors = false;
-	
+	Options.RequestedLOD.LODType = EGeometryScriptLODType::RenderData;
+	Options.RequestedLOD.LODIndex = 0;
+
 	FTransform DummyTransform;         
 	EGeometryScriptOutcomePins Outcome; 	
 	UGeometryScriptLibrary_SceneUtilityFunctions::CopyMeshFromComponent(
@@ -5611,10 +5564,12 @@ void ASonoTraceUEActor::CalculateMeshCurvature(UMeshComponent* MeshComponent, FS
    	UDynamicMesh* DynamicMesh = NewObject<UDynamicMesh>();
 	
 	static FGeometryScriptCopyMeshFromComponentOptions Options;
-	Options.bWantNormals = true;  
+	Options.bWantNormals = true;
 	Options.bWantTangents = false;
 	Options.bWantInstanceColors = false;
-	
+	Options.RequestedLOD.LODType = EGeometryScriptLODType::RenderData;
+	Options.RequestedLOD.LODIndex = 0;
+
 	FTransform DummyTransform;         
 	EGeometryScriptOutcomePins Outcome; 	
 	UGeometryScriptLibrary_SceneUtilityFunctions::CopyMeshFromComponent(
