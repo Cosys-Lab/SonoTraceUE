@@ -1299,27 +1299,27 @@ public:
 	void InterfaceOnReceiveString(const FString& ReceivedString, const UObjectDelivererProtocol* FromObject);	
 
 	// When this is true, the EnableSimulation variable overrides the Input Settings Data Table mode
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE|Input")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE|Input", meta=(ExposeOnSpawn="true"))
 	bool EnableSimulationEnableOverride = false;
 
 	// Available when setting EnableSimulationEnableOverride to true
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE|Input", meta=(EditCondition = "EnableSimulationEnableOverride", EditConditionHides))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE|Input", meta=(EditCondition = "EnableSimulationEnableOverride", EditConditionHides, ExposeOnSpawn="true"))
 	bool EnableSimulation = true;
 
 	// Input settings data table, when it is not assigned and not retrieved from the interfaceAPI will use default settings
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE|Input")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE|Input", meta=(ExposeOnSpawn="true"))
 	USonoTraceUEInputSettingsData* InputSettings;
 
 	// When this is true, the EnableInterface, InterfaceIP, and InterfacePort variables override the Interface Settings Data Table values
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE|Interface")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE|Interface", meta=(ExposeOnSpawn="true"))
 	bool EnableInterfaceEnableOverride = false;
 
 	// Available when setting EnableInterfaceEnableOverride to true
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE|Interface", meta=(EditCondition = "EnableInterfaceEnableOverride", EditConditionHides))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE|Interface", meta=(EditCondition = "EnableInterfaceEnableOverride", EditConditionHides, ExposeOnSpawn="true"))
 	bool EnableInterface = false;
 
 	// If not set, it will use the default settings and the interface will be disabled
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE|Interface")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE|Interface", meta=(ExposeOnSpawn="true"))
 	USonoTraceUEInterfaceSettingsData* InterfaceSettings;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SonoTraceUE|Output")
