@@ -9,7 +9,7 @@
 
 DECLARE_LOG_CATEGORY_EXTERN(SonoTraceUE, Log, All);
 
-inline constexpr UINT32 MaxEmitterCount = 32;
+inline constexpr uint32 MaxEmitterCount = 32u;
 
 class FSonoTrace;
 

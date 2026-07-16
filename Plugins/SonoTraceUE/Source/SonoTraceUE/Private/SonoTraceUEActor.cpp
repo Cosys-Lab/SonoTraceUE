@@ -2227,8 +2227,6 @@ void ASonoTraceUEActor::RunSimulation(const TArray<int32> OverrideEmitterSignalI
 	CurrentOutput.MaximumStrength = FMath::Max(DirectPathSubOutput.MaximumStrength,FMath::Max(RayTracingSubOutput.MaximumStrength, DiffractionSubOutput.MaximumStrength));
 	CurrentOutput.MaximumTotalDistance = FMath::Max(DirectPathSubOutput.MaximumTotalDistance,FMath::Max(RayTracingSubOutput.MaximumTotalDistance, DiffractionSubOutput.MaximumTotalDistance));
 	
-	CurrentOutput = CurrentOutput;
-
 	if (InterfaceConnected)		
 	{
 		PrepareInterfaceMeasurementData(CurrentOutput);
