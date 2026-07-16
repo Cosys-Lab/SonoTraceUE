@@ -883,6 +883,15 @@ void ASonoTraceUEActor::SendInterfaceSettings()
 	int32 DataSize = DataToSend.Num();
 	DataSizeToSend.Append(reinterpret_cast<uint8*>(&DataSize), sizeof(int32));
 	DataSizeToSend.Shrink();
+	// TEMP DEBUG: confirm exactly what bytes we think we're sending for the size prefix
+	// and payload start, to compare against what the Python/MATLAB client actually
+	// receives (helps diagnose whether ObjectDeliverer/PacketRuleNodivision/
+	// UUtf8StringDeliveryBox alters raw binary bytes in transit).
+	UE_LOG(SonoTraceUE, Warning, TEXT("[DEBUG] DataToSend.Num()=%d, DataSizeToSend bytes: %02X %02X %02X %02X"),
+		DataSize, DataSizeToSend[0], DataSizeToSend[1], DataSizeToSend[2], DataSizeToSend[3]);
+	UE_LOG(SonoTraceUE, Warning, TEXT("[DEBUG] DataToSend first 16 bytes: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X"),
+		DataToSend[0], DataToSend[1], DataToSend[2], DataToSend[3], DataToSend[4], DataToSend[5], DataToSend[6], DataToSend[7],
+		DataToSend[8], DataToSend[9], DataToSend[10], DataToSend[11], DataToSend[12], DataToSend[13], DataToSend[14], DataToSend[15]);
 	ObjectDelivererManager->Send(DataSizeToSend);
 	ObjectDelivererManager->Send(DataToSend);
 	UE_LOG(SonoTraceUE, Log, TEXT("Sent settings over interface."));

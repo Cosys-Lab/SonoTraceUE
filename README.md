@@ -11,6 +11,8 @@ SonoTraceUE is a high-fidelity acoustic simulation plugin for Unreal Engine 5 th
  - Demonstration video: [https://www.youtube.com/watch?v=_Z39IlmT22E](https://www.youtube.com/watch?v=_Z39IlmT22E)
  - Paper Preprint: [https://arxiv.org/abs/2602.19652](https://arxiv.org/abs/2602.19652)
 
+ Note that to retrieve the simulation data you will require a [API client](#api), for which we currently have one for [Matlab](https://github.com/Cosys-Lab/SonoTraceUE-Matlab-Toolbox) and [Python](https://pypi.org/project/sonotraceuepy/).
+
 ## Publication
 We kindly ask to cite our paper if you find this repository useful:
 ```
@@ -1466,10 +1468,16 @@ Contains processed/generated settings derived from InputSettings.
 ## API
 
 A socket-based API is available to access SonoTraceUE with third-party tools. 
-Currently a Matlab Client API is available [here](https://github.com/Cosys-Lab/SonoTraceUE-Matlab-Toolbox). You will find more information there on how to control the simulation from the API client.
+The `USonoTraceUEInterfaceSettingsData` class configures the TCP/IP network interface for external control and data acquisition.
+
 The _Default_ example level in the sample project is ideal for testing with example code in the Client API tools.
 
-The `USonoTraceUEInterfaceSettingsData` class configures the TCP/IP network interface for external control and data acquisition.
+### Matlab
+Currently a Matlab Client API is available [here](https://github.com/Cosys-Lab/SonoTraceUE-Matlab-Toolbox), also to be found on [the Mathworks File Exchange for installation](https://www.mathworks.com/matlabcentral/fileexchange/183020-sonotraceue-matlab-toolbox). 
+
+### Python
+Currently a Python Client API is available [here](https://github.com/Cosys-Lab/sonotraceuepy). You will find more information there on how to control the simulation from the API client.
+It is also easy to install from pip with `pip install sonotraceuepy`.
 
 ### Properties
 
