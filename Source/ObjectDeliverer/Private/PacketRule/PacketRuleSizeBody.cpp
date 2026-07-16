@@ -22,7 +22,7 @@ void UPacketRuleSizeBody::MakeSendPacket(const TArray<uint8>& BodyBuffer)
 {
 	auto BodyBufferNum = BodyBuffer.Num();
 	auto SendSize = BodyBufferNum + SizeLength;
-	BufferForSend.SetNum(SendSize, false);
+	BufferForSend.SetNum(SendSize, EAllowShrinking::No);
 
 	for (int i = 0; i < SizeLength; ++i)
 	{

@@ -4,7 +4,6 @@
 #include "/Engine/Private/Hash.ush"
 #include "/Engine/Private/RayTracing/RayTracingCommon.ush"
 #include "/Engine/Private/RayTracing/RayTracingHitGroupCommon.ush"
-#include "/Engine/Private/RayTracing/RayTracingDebugUtils.ush"
 
 static const uint MaxEmitterCount = 32; // needs to match MaxEmitterCount in SonoTrace.h
 
@@ -22,21 +21,80 @@ struct FStructuredOutputBufferElem
 	float   RayDistanceTotal;
 	bool    HitLineOfSightToSensor;
 	int    DirectPath;
-	float   DistancesFromEmitterTotal[MaxEmitterCount]; 
+	float   DistancesFromEmitterTotal[MaxEmitterCount];
 };
 
 RaytracingAccelerationStructure TLAS;
+StructuredBuffer<FRayTracingSceneMetadataRecord> RayTracingSceneMetadata;
 uint MaxBounces;
 uint EmitterCount;
 uint DistributionRayCount;
+uint TotalRayCount;
 RWStructuredBuffer<float1> AzimuthAnglesBuffer;
 RWStructuredBuffer<float1> ElevationAnglesBuffer;
 RWStructuredBuffer<float1> SensorConfigurationBuffer;
 RWStructuredBuffer<FStructuredOutputBufferElem> OutputBuffer;
-// RayGen Shader
-RAY_TRACING_ENTRY_RAYGEN(SonoTraceRGS)
+
+float3 GetSonoTraceWorldNormal(FTraceRayInlineResult TraceResult)
 {
-	uint1 RayIndex = DispatchRaysDimensions().x * DispatchRaysIndex().y + DispatchRaysIndex().x;
+#if PLATFORM_SUPPORTS_INLINE_RAY_TRACING_TRIANGLE_NORMALS
+	return TraceResult.WorldGeometryNormal;
+#elif PLATFORM_SUPPORTS_INLINE_RAY_TRACING_TRIANGLE_ATTRIBUTES
+	FTriangleBaseAttributes Attributes = LoadInlineRayTracingTriangleAttributes(
+		RayTracingSceneMetadata,
+		TraceResult.InstanceContributionToHitGroupIndex,
+		RAY_TRACING_NUM_SHADER_SLOTS,
+		TraceResult.GeometryIndex,
+		TraceResult.PrimitiveIndex);
+
+	float3 LocalEdges[2];
+	LocalEdges[0] = Attributes.LocalPositions[1] - Attributes.LocalPositions[0];
+	LocalEdges[1] = Attributes.LocalPositions[2] - Attributes.LocalPositions[0];
+	float3 LocalNormal = cross(LocalEdges[1], LocalEdges[0]);
+	return normalize(mul(LocalNormal, (float3x3)TraceResult.WorldToObject3x4));
+#else
+	return float3(0, 0, 1);
+#endif
+}
+
+// Runs one bounce's worth of inline ray tracing and writes the result to OutputBuffer[OutputIndex].
+// Returns true if the ray hit geometry.
+bool TraceSonoTraceRay(float3 Origin, float3 Direction, float TMax, uint RayFlags, out float3 OutHitPos, out float3 OutWorldNormal, out int OutInstanceId, out int OutTriangleIndex, out float OutHitT)
+{
+	RayDesc Ray;
+	Ray.Origin = Origin;
+	Ray.Direction = Direction;
+	Ray.TMin = 0.0f;
+	Ray.TMax = TMax;
+
+	FTraceRayInlineContext Context = CreateTraceRayInlineContext();
+	FTraceRayInlineResult Result = TraceRayInline(TLAS, RayFlags, RAY_TRACING_MASK_ALL, Ray, Context);
+
+	OutHitT = Result.HitT;
+	if (Result.IsHit())
+	{
+		OutHitPos = Ray.Origin + Ray.Direction * Result.HitT;
+		OutWorldNormal = GetSonoTraceWorldNormal(Result);
+		OutTriangleIndex = Result.PrimitiveIndex;
+
+		const FInstanceSceneData InstanceSceneData = GetInstanceSceneData(Result.InstanceID);
+		OutInstanceId = InstanceSceneData.PrimitiveId;
+		return true;
+	}
+
+	OutHitPos = float3(0, 0, 0);
+	OutWorldNormal = float3(0, 0, 1);
+	OutInstanceId = -1;
+	OutTriangleIndex = -1;
+	return false;
+}
+
+[numthreads(32, 1, 1)]
+void SonoTraceCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+	uint1 RayIndex = DispatchThreadId.x;
+	if (RayIndex >= TotalRayCount)
+		return;
 
 	// Sensor Pose in Unreal World coordinate frame
 	float3 SensorPosition = float3(
@@ -53,42 +111,42 @@ RAY_TRACING_ENTRY_RAYGEN(SonoTraceRGS)
 	for (int EmitterIndex = 0; EmitterIndex < EmitterCount; EmitterIndex++)
 	{
 		EmitterPositionsInTLAS[EmitterIndex] = float3(
-			SensorConfigurationBuffer[7 + EmitterIndex * 3], // X 
+			SensorConfigurationBuffer[7 + EmitterIndex * 3], // X
 			SensorConfigurationBuffer[7 + EmitterIndex * 3 + 1], // Y
 			SensorConfigurationBuffer[7 + EmitterIndex * 3 + 2]) // Z
 		 - DFHackToFloat(PrimaryView.WorldCameraOrigin);
 		DistanceFromEmitterSoFar[EmitterIndex] = 0;
-	}		
+	}
 
 	// Get Azimuth and Elevation Angles in Unreal world coordinate frame
 	float Azimuth = AzimuthAnglesBuffer[RayIndex];
 	float Elevation = ElevationAnglesBuffer[RayIndex];
-	
+
 	// Compute a direction in local coordinates in the Unreal world coordinate frame
 	float3 LocalRayDirection = normalize(float3(
 		cos(Elevation) * cos(Azimuth),
 		cos(Elevation) * sin(Azimuth),
 		sin(Elevation)
 	));
-	
+
 	float4x4 YawMatrix = float4x4(
-		cos(SensorRotation.z), -sin(SensorRotation.z), 0, 0,  
-		sin(SensorRotation.z),  cos(SensorRotation.z), 0, 0,  
-		0,            0,           1, 0,   
-		0,            0,           0, 1    
+		cos(SensorRotation.z), -sin(SensorRotation.z), 0, 0,
+		sin(SensorRotation.z),  cos(SensorRotation.z), 0, 0,
+		0,            0,           1, 0,
+		0,            0,           0, 1
 	);
 
 	float4x4 PitchMatrix = float4x4(
-		cos(SensorRotation.y),  0, sin(SensorRotation.y),  0, 
+		cos(SensorRotation.y),  0, sin(SensorRotation.y),  0,
 		0,             1, 0,             0,
 		-sin(SensorRotation.y), 0, cos(SensorRotation.y),  0,
-		0,             0, 0,             1  
+		0,             0, 0,             1
 	);
 
 	float4x4 RollMatrix = float4x4(
 		1, 0,             0,              0,
 		0, cos(SensorRotation.x), -sin(SensorRotation.x),   0,
-		0, sin(SensorRotation.x),  cos(SensorRotation.x),   0, 
+		0, sin(SensorRotation.x),  cos(SensorRotation.x),   0,
 		0, 0,             0,              1
 	);
 
@@ -123,41 +181,22 @@ RAY_TRACING_ENTRY_RAYGEN(SonoTraceRGS)
 		{
 			// Compute the output index for this ray and this bounce
 			uint OutputIndex = RayIndex * MaxBounces + BounceIndex;
-			
-			// Setup ray
-			FRayDesc Ray;
-			Ray.Origin = CurrentOrigin;
-			Ray.Direction = CurrentDirection;
-			Ray.TMin = 0.0f;
-			Ray.TMax = MaxDistance;
-		
-			// Setup raytracing
-			uint RayFlags = RAY_FLAG_CULL_BACK_FACING_TRIANGLES;
-		
-			FRayTracingDebugPayload Payload = (FRayTracingDebugPayload)0; // Reset payload each bounce
-			Payload.SetMiss();
 
-			TraceRay(
-			TLAS,
-			RayFlags,
-			RAY_TRACING_MASK_ALL,
-			0,                      // SBTRecordOffset
-			RAY_TRACING_NUM_SHADER_SLOTS, // Shader slot index
-			0,                      // Miss shader index
-			Ray.GetNativeDesc(),
-			Payload);
-		
+			float3 HitPos, WorldNormal;
+			int InstanceId, TriangleIndex;
+			float HitT;
+			bool bHit = TraceSonoTraceRay(CurrentOrigin, CurrentDirection, MaxDistance, RAY_FLAG_CULL_BACK_FACING_TRIANGLES, HitPos, WorldNormal, InstanceId, TriangleIndex, HitT);
+
 			// Check the hit result
-			if (Payload.HitT > 0.0f)
+			if (bHit)
 			{
-				float3 ReflectionDirection = normalize(reflect(Ray.Direction, Payload.WorldNormal));	
-				float3 HitPos = Ray.Origin + Ray.Direction * Payload.HitT;
+				float3 ReflectionDirection = normalize(reflect(CurrentDirection, WorldNormal));
 				float3 HitPosInCameraFrame = HitPos + DFHackToFloat(PrimaryView.WorldCameraOrigin);
-				RayTotalDistanceSoFar = RayTotalDistanceSoFar + Payload.HitT;
-				
+				RayTotalDistanceSoFar = RayTotalDistanceSoFar + HitT;
+
 				OutputBuffer[OutputIndex].IsHit = true;
-				OutputBuffer[OutputIndex].HitScenePrimitiveIndex = Payload.ScenePrimitiveIndex;
-				OutputBuffer[OutputIndex].HitTriangleIndex = Payload.TriangleIndex;
+				OutputBuffer[OutputIndex].HitScenePrimitiveIndex = InstanceId;
+				OutputBuffer[OutputIndex].HitTriangleIndex = TriangleIndex;
 				OutputBuffer[OutputIndex].HitPosX = HitPosInCameraFrame.x;
 				OutputBuffer[OutputIndex].HitPosY = HitPosInCameraFrame.y;
 				OutputBuffer[OutputIndex].HitPosZ = HitPosInCameraFrame.z;
@@ -182,7 +221,7 @@ RAY_TRACING_ENTRY_RAYGEN(SonoTraceRGS)
 						}else
 						{
 							OutputBuffer[OutputIndex].DistancesFromEmitterTotal[EmitterIndex] = DistanceFromEmitter;
-						}		
+						}
 					}
 				}else
 				{
@@ -195,45 +234,26 @@ RAY_TRACING_ENTRY_RAYGEN(SonoTraceRGS)
 							OutputBuffer[OutputIndex].IsHit = false;
 						}else
 						{
-							OutputBuffer[OutputIndex].DistancesFromEmitterTotal[EmitterIndex] = CurrentDistanceFromEmitter + Payload.HitT;
-						}						
+							OutputBuffer[OutputIndex].DistancesFromEmitterTotal[EmitterIndex] = CurrentDistanceFromEmitter + HitT;
+						}
 					}
 				}
-				
+
 				// Update for next bounce
 				CurrentOrigin = HitPos;
 				CurrentDirection = ReflectionDirection;
 
 				if (BounceIndex > 0) // Skip LOS check for the first bounce
 				{
-					// Setup ray
-					FRayDesc LOSRay;
-					LOSRay.Origin = CurrentOrigin;
-					LOSRay.Direction = normalize(SensorPositionInTLAS - CurrentOrigin);
-					LOSRay.TMin = 0.0f;
-					LOSRay.TMax = length(SensorPositionInTLAS - CurrentOrigin);
+					float3 LOSDirection = normalize(SensorPositionInTLAS - CurrentOrigin);
+					float LOSDistance = length(SensorPositionInTLAS - CurrentOrigin);
 
-					uint RayFlagsLOS = RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH;
-					
-					FRayTracingDebugPayload PayloadLOS = (FRayTracingDebugPayload)0; 
-					PayloadLOS.SetMiss();	
-					TraceRay(
-					TLAS,
-					RayFlagsLOS,
-					RAY_TRACING_MASK_ALL,
-					0,                      
-					RAY_TRACING_NUM_SHADER_SLOTS, 
-					0,                
-					LOSRay.GetNativeDesc(),
-					PayloadLOS);
-					
-					if (PayloadLOS.HitT > 0.0f)
-					{
-						OutputBuffer[OutputIndex].HitLineOfSightToSensor = false;
-					}else
-					{
-						OutputBuffer[OutputIndex].HitLineOfSightToSensor = true;
-					}
+					float3 LOSHitPos, LOSWorldNormal;
+					int LOSInstanceId, LOSTriangleIndex;
+					float LOSHitT;
+					bool bLOSHit = TraceSonoTraceRay(CurrentOrigin, LOSDirection, LOSDistance, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, LOSHitPos, LOSWorldNormal, LOSInstanceId, LOSTriangleIndex, LOSHitT);
+
+					OutputBuffer[OutputIndex].HitLineOfSightToSensor = !bLOSHit;
 				}else {
 					OutputBuffer[OutputIndex].HitLineOfSightToSensor = true;
 				}
@@ -245,7 +265,7 @@ RAY_TRACING_ENTRY_RAYGEN(SonoTraceRGS)
 					OutputBuffer[RemainingOutputIndex].IsHit = false;
 				}
 				break;
-			}		
+			}
 		}
 	// The secondary optional component where there is a LOS check between the sensor and the receivers to see
 	// if there is a direct path between them
@@ -253,62 +273,43 @@ RAY_TRACING_ENTRY_RAYGEN(SonoTraceRGS)
 		// Compute the output index for this ray and this bounce
 		uint OutputIndex = RayIndex * MaxBounces;
 
-		// Setup ray
-		FRayDesc Ray;
-		Ray.Origin = CurrentOrigin;
-		Ray.Direction = CurrentDirection;
-		Ray.TMin = 0.0f;
-		Ray.TMax = MaxDistance;
-	
-		// Setup raytracing
-		uint RayFlags = RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH;
-	
-		FRayTracingDebugPayload Payload = (FRayTracingDebugPayload)0; // Reset payload each bounce
-		Payload.SetMiss();
-
-		TraceRay(
-		TLAS,
-		RayFlags,
-		RAY_TRACING_MASK_ALL,
-		0,                      // SBTRecordOffset
-		RAY_TRACING_NUM_SHADER_SLOTS, // Shader slot index
-		0,                      // Miss shader index
-		Ray.GetNativeDesc(),
-		Payload);
+		float3 HitPos, WorldNormal;
+		int InstanceId, TriangleIndex;
+		float HitT;
+		bool bHit = TraceSonoTraceRay(CurrentOrigin, CurrentDirection, MaxDistance, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, HitPos, WorldNormal, InstanceId, TriangleIndex, HitT);
 
 		// Check the hit result, if empty, that is good cause that means that there is LOS
-		if (Payload.HitT <= 0.0f)
+		if (!bHit)
 		{
-			float3 HitPosInCameraFrame = Ray.Origin + DFHackToFloat(PrimaryView.WorldCameraOrigin);
-			
+			float3 HitPosInCameraFrame = CurrentOrigin + DFHackToFloat(PrimaryView.WorldCameraOrigin);
+
 			OutputBuffer[OutputIndex].IsHit = true;
 			OutputBuffer[OutputIndex].HitScenePrimitiveIndex = -1;
 			OutputBuffer[OutputIndex].HitTriangleIndex = -1;
 			OutputBuffer[OutputIndex].HitPosX = HitPosInCameraFrame.x;
 			OutputBuffer[OutputIndex].HitPosY = HitPosInCameraFrame.y;
 			OutputBuffer[OutputIndex].HitPosZ = HitPosInCameraFrame.z;
-			OutputBuffer[OutputIndex].HitReflectionX = Ray.Direction.x;
-			OutputBuffer[OutputIndex].HitReflectionY = Ray.Direction.y;
-			OutputBuffer[OutputIndex].HitReflectionZ = Ray.Direction.z;
+			OutputBuffer[OutputIndex].HitReflectionX = CurrentDirection.x;
+			OutputBuffer[OutputIndex].HitReflectionY = CurrentDirection.y;
+			OutputBuffer[OutputIndex].HitReflectionZ = CurrentDirection.z;
 			OutputBuffer[OutputIndex].RayDistanceTotal = -1;
-			OutputBuffer[OutputIndex].DirectPath = 1;			
+			OutputBuffer[OutputIndex].DirectPath = 1;
 		}else
 		{
 			// if there is a hit result, save the result so it can be used later to see if there is LOS
-			float3 HitPos = Ray.Origin + Ray.Direction * Payload.HitT;
 			float3 HitPosInCameraFrame = HitPos + DFHackToFloat(PrimaryView.WorldCameraOrigin);
-			RayTotalDistanceSoFar = RayTotalDistanceSoFar + Payload.HitT;				
+			RayTotalDistanceSoFar = RayTotalDistanceSoFar + HitT;
 			OutputBuffer[OutputIndex].IsHit = false;
 			OutputBuffer[OutputIndex].HitScenePrimitiveIndex = -1;
 			OutputBuffer[OutputIndex].HitTriangleIndex = -1;
 			OutputBuffer[OutputIndex].HitPosX = HitPosInCameraFrame.x;
 			OutputBuffer[OutputIndex].HitPosY = HitPosInCameraFrame.y;
 			OutputBuffer[OutputIndex].HitPosZ = HitPosInCameraFrame.z;
-			OutputBuffer[OutputIndex].HitReflectionX = Ray.Direction.x;
-			OutputBuffer[OutputIndex].HitReflectionY = Ray.Direction.y;
-			OutputBuffer[OutputIndex].HitReflectionZ = Ray.Direction.z;
-			OutputBuffer[OutputIndex].RayDistanceTotal = Payload.HitT;
-			OutputBuffer[OutputIndex].DirectPath = 1;		
+			OutputBuffer[OutputIndex].HitReflectionX = CurrentDirection.x;
+			OutputBuffer[OutputIndex].HitReflectionY = CurrentDirection.y;
+			OutputBuffer[OutputIndex].HitReflectionZ = CurrentDirection.z;
+			OutputBuffer[OutputIndex].RayDistanceTotal = HitT;
+			OutputBuffer[OutputIndex].DirectPath = 1;
 		}
 
 		// No hit: Set IsHit = false for the rest of the bounce fields
@@ -318,19 +319,4 @@ RAY_TRACING_ENTRY_RAYGEN(SonoTraceRGS)
 			OutputBuffer[RemainingOutputIndex].IsHit = false;
 		}
 	}
-}
-
-RAY_TRACING_ENTRY_MISS(SonoTraceMS, FRayTracingDebugPayload, Payload)
-{
-	Payload.SetMiss();
-}
-
-RAY_TRACING_ENTRY_CLOSEST_HIT(SonoTraceCHS, FRayTracingDebugPayload, Payload, FRayTracingIntersectionAttributes, Attributes)
-{
-	Payload.HitT = RayTCurrent();
-
-	Payload.TriangleIndex = PrimitiveIndex();
-	const int ScenePrimitiveIndex = GetInstanceUserData();
-	Payload.ScenePrimitiveIndex = ScenePrimitiveIndex;
-	Payload.WorldNormal = GetGeometryNormalFromTriangleBaseAttributes(PrimitiveIndex());
 }

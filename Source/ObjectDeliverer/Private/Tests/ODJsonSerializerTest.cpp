@@ -6,7 +6,7 @@
 #include "DeliveryBox/ObjectDeliveryBoxUsingJson.h"
 #include "ObjectDelivererManagerTestHelper.h"
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(ODJsonSerializer_Tests, "ObjectDeliverer.JsonSerializer.SerializationTest", EAutomationTestFlags::ApplicationContextMask | EAutomationTestFlags::SmokeFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(ODJsonSerializer_Tests, "ObjectDeliverer.JsonSerializer.SerializationTest", EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::SmokeFilter)
 
 bool ODJsonSerializer_Tests::RunTest(const FString& Parameters)
 {
@@ -48,7 +48,7 @@ bool ODJsonSerializer_Tests::RunTest(const FString& Parameters)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(ODJsonSerializer_ConvertPropertyNameTest, "ObjectDeliverer.JsonSerializer.ConvertPropertyNameTest", EAutomationTestFlags::ApplicationContextMask | EAutomationTestFlags::SmokeFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(ODJsonSerializer_ConvertPropertyNameTest, "ObjectDeliverer.JsonSerializer.ConvertPropertyNameTest", EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::SmokeFilter)
 
 bool ODJsonSerializer_ConvertPropertyNameTest::RunTest(const FString& Parameters)
 {

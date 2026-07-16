@@ -9,7 +9,7 @@
 
 DECLARE_LOG_CATEGORY_EXTERN(SonoTraceUE, Log, All);
 
-inline constexpr UINT32 MaxEmitterCount = 32;
+inline constexpr uint32 MaxEmitterCount = 32u;
 
 class FSonoTrace;
 
@@ -68,8 +68,7 @@ public:
 	
 private:
 	void Execute_RenderThread(FPostOpaqueRenderParameters& Parameters);
-	static void BindSonoTraceCHSBindings(FRHICommandList& RHICmdList, const FViewInfo& View, FRHIRayTracingScene* RHIScene, FRHIUniformBuffer* SceneUniformBuffer, FRayTracingPipelineState* PipelineState);
-	
+
 	FDelegateHandle SonoTraceRenderDelegate;
 	FSonoTraceParameters CachedParams;
 	volatile bool bCachedParamsAreValid = false;
