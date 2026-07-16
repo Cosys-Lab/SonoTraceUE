@@ -3,7 +3,7 @@
 #include "PacketRule/PacketRuleFixedLength.h"
 #include "PacketRule/PacketRuleFactory.h"
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCNPacketRuleFixedLengthTest_MakeSendPacket, "ObjectDeliverer.PacketRuleTests.CNPacketRuleFixedLengthTest.MakeSendPacket", EAutomationTestFlags::ApplicationContextMask | EAutomationTestFlags::SmokeFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCNPacketRuleFixedLengthTest_MakeSendPacket, "ObjectDeliverer.PacketRuleTests.CNPacketRuleFixedLengthTest.MakeSendPacket", EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::SmokeFilter)
 
 bool FCNPacketRuleFixedLengthTest_MakeSendPacket::RunTest(const FString& Parameters)
 {
@@ -97,7 +97,7 @@ bool FCNPacketRuleFixedLengthTest_MakeSendPacket::RunTest(const FString& Paramet
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCNPacketRuleFixedLengthTest_NotifyReceiveData, "ObjectDeliverer.PacketRuleTests.CNPacketRuleFixedLengthTest.NotifyReceiveData", EAutomationTestFlags::ApplicationContextMask | EAutomationTestFlags::SmokeFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCNPacketRuleFixedLengthTest_NotifyReceiveData, "ObjectDeliverer.PacketRuleTests.CNPacketRuleFixedLengthTest.NotifyReceiveData", EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::SmokeFilter)
 
 bool FCNPacketRuleFixedLengthTest_NotifyReceiveData::RunTest(const FString& Parameters)
 {

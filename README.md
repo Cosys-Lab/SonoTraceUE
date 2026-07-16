@@ -24,11 +24,10 @@ We kindly ask to cite our paper if you find this repository useful:
 
 ## Requirements
 
-- **Unreal Engine Version**: 5.4
+- **Unreal Engine Version**: 5.8
 - **Hardware Requirements**:
-  - GPU with hardware ray tracing support
-  - DirectX 12 support
-- **Operating System**: Windows for now due to DirectX 12 requirement
+  - GPU with hardware ray tracing support with up to date drivers
+- **Operating System**: Windows 11 with DirectX12 and Ubuntu 24.04 with Vulkan were tested and worked
 
 Hardware ray tracing **must** be enabled in Unreal Engine for this plugin to function correctly:
 
@@ -57,12 +56,24 @@ You can add it directly through the Place Actors panel or through a blueprint as
 
 ## Usage Tips
 
+### Excluding an actor entirely
+
+To exclude an actor entirely from the SonoTraceUE mesh analysis system (no registration, no mesh data generation, never appears in hit output) - for example a decorative sky dome/backdrop that shouldn't participate in the acoustic simulation at all - add the Actor Tag `SonoTraceUEIgnore` to it (Details panel → Tags). It will be skipped as soon as it's added to the system (e.g. during initial actor scanning, or via `AddActor`).
+
 ### Skeletal Meshes and Diffraction
 
 By default, skeletal meshes should have diffraction disabled as the diffraction is based on the initial frame pre-calculation location of all triangles, and animations and deformations are not taking into account. Enable with:
 ```cpp
 InputSettings->EnableDiffractionForDynamicObjects = true;
 ```
+
+Note that Nanite skeletal meshes are currently not supported by Unreal Engine's ray/path tracing so these meshes will also not work for SonoTraceUE simulation.
+
+### Nanite Static Meshes
+
+SonoTraceUE's per-triangle material data is precomputed from a mesh's original render data, and ray hits are matched back to that data by triangle index. For Nanite static meshes, this only lines up correctly when ray tracing uses Nanite's fixed fallback proxy mesh,the other two current Nanite ray tracing modes (streamed-out mesh, and CLAS/cluster acceleration structures) rebuild a different, LOD-varying mesh at runtime whose triangle indices do not correspond to the precomputed data, causing mismatched or out-of-bounds lookups.
+
+This project's `Config/DefaultEngine.ini` sets `r.RayTracing.Nanite.Mode=0` (fallback mesh) to enforce this,this setting is **required** for correct SonoTraceUE results on Nanite static meshes and should not be changed. 
 
 ### Coordinate System
 

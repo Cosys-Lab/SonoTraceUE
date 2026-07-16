@@ -46,7 +46,7 @@ bool UODJsonDeserializer::JsonPropertyToFProperty(const TSharedPtr<FJsonObject>&
 	}
 
 	auto& JsonAttributes = JsonObject->Values;
-	const TSharedPtr<FJsonValue>* JsonValue = JsonAttributes.Find(PropertyName);
+	const TSharedPtr<FJsonValue>* JsonValue = JsonAttributes.Find(UE::FSharedString(PropertyName));
 	if (!JsonValue)
 	{
 		return false;
@@ -79,7 +79,7 @@ bool UODJsonDeserializer::JsonObjectToUStruct(const TSharedPtr<FJsonObject>& Jso
 	{
 		FProperty* Property = *PropIt;
 
-		const TSharedPtr<FJsonValue>* JsonValue = JsonAttributes.Find(Property->GetName());
+		const TSharedPtr<FJsonValue>* JsonValue = JsonAttributes.Find(UE::FSharedString(Property->GetName()));
 		if (!JsonValue)
 		{
 			continue;
@@ -345,7 +345,7 @@ bool UODJsonDeserializer::JsonValueToFMapProperty(const TSharedPtr<FJsonValue>& 
 			{
 				int32 NewIndex = Helper.AddDefaultValue_Invalid_NeedsRehash();
 
-				TSharedPtr<FJsonValueString> TempKeyValue = MakeShareable(new FJsonValueString(Entry.Key));
+				TSharedPtr<FJsonValueString> TempKeyValue = MakeShareable(new FJsonValueString(FString(Entry.Key.ToView())));
 
 				const bool bKeySuccess = JsonValueToFProperty(TempKeyValue, MapProperty->KeyProp, Helper.GetKeyPtr(NewIndex));
 				const bool bValueSuccess = JsonValueToFProperty(Entry.Value, MapProperty->ValueProp, Helper.GetValuePtr(NewIndex));

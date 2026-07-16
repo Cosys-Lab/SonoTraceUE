@@ -8,6 +8,7 @@
 #include "SceneInterface.h"
 #include "Engine/DataTable.h"
 #include "SonoTrace.h"
+#include "LandscapeComponent.h"
 #include "Math/UnrealMathUtility.h"
 #include <string>
 #include "ObjectDeliverer/Public/Protocol/ProtocolTcpIpClient.h"
@@ -147,6 +148,10 @@ bool ASonoTraceUEActor::AddActor(AActor* Actor, const bool OverrideInitializatio
 {
 	if (!Initialized && !OverrideInitialization)
 		return false;
+	// Actors tagged "SonoTraceUEIgnore" (e.g. sky domes, decorative backdrops) are skipped entirely -
+	// not registered, not mesh-analyzed, never part of hit output.
+	if (Actor->ActorHasTag(TEXT("SonoTraceUEIgnore")))
+		return true;
 	TArray<UStaticMeshComponent*> StaticMeshComponents;
 	Actor->GetComponents<UStaticMeshComponent>(StaticMeshComponents, true);
 	FString ActorName = Actor->GetName();
@@ -165,8 +170,48 @@ bool ASonoTraceUEActor::AddActor(AActor* Actor, const bool OverrideInitializatio
 		if (!CurrentSuccess)
 			ReturnValue = false;
 	}
+	TArray<ULandscapeComponent*> LandscapeComponents;
+	Actor->GetComponents<ULandscapeComponent>(LandscapeComponents, true);
+	for (ULandscapeComponent* LandscapeComp : LandscapeComponents)
+	{
+		const bool CurrentSuccess = AddLandscapeComponent(LandscapeComp, ActorName, OverrideInitialization, false);
+		if (!CurrentSuccess)
+			ReturnValue = false;
+	}
 	if (UpdateTable) UpdateScenePrimitiveIndexToPersistentPrimitiveIndexTable();
 	return ReturnValue;
+}
+
+bool ASonoTraceUEActor::AddLandscapeComponent(ULandscapeComponent* LandscapeComponent, FString ObjectNamePrefix, const bool OverrideInitialization, const bool UpdateTable)
+{
+	if (!Initialized && !OverrideInitialization)
+		return false;
+	if (!LandscapeComponent || !LandscapeComponent->SceneProxy)
+		return false;
+
+	const int32 ScenePrimitiveIndex = LandscapeComponent->SceneProxy->GetPrimitiveSceneInfo()->GetIndex();
+	if (ScenePrimitiveIndex == -1)
+		return false;
+
+	const int32 PersistentPrimitiveIndex = LandscapeComponent->SceneProxy->GetPrimitiveSceneInfo()->GetPersistentIndex().Index;
+	if (PersistentPrimitiveIndexToLabelsAndObjectTypes.Contains(PersistentPrimitiveIndex))
+	{
+		if (UpdateTable) UpdateScenePrimitiveIndexToPersistentPrimitiveIndexTable();
+		return false;
+	}
+
+	// Landscape components have no StaticMesh asset, so per-triangle curvature/BRDF/material data can't be generated for them.
+	// Register with Object Type 0's defaults instead of leaving this to fall through the runtime "unknown object" path.
+	const FSonoTraceUEObjectSettingsStruct* ObjectSettings = &GeneratedSettings.ObjectSettings[0];
+	const FName Label = FName(ObjectNamePrefix + TEXT("_") + LandscapeComponent->GetName());
+	UE_LOG(SonoTraceUE, Warning, TEXT("SKIPPED: Landscape component '%s' has no per-triangle mesh data support. Default acoustic properties from ObjectSettings '%s' will be used for all hits on this object instead."),
+		   *LandscapeComponent->GetName(), *ObjectSettings->Name.ToString());
+
+	PersistentPrimitiveIndexToPrimitiveComponent.Add(PersistentPrimitiveIndex, LandscapeComponent);
+	ScenePrimitiveIndexToPersistentPrimitiveIndex.Add(ScenePrimitiveIndex, PersistentPrimitiveIndex);
+	PersistentPrimitiveIndexToLabelsAndObjectTypes.Add(PersistentPrimitiveIndex, TTuple<FName, int32>(Label, 0));
+	if (UpdateTable) UpdateScenePrimitiveIndexToPersistentPrimitiveIndexTable();
+	return true;
 }
 
 bool ASonoTraceUEActor::AddStaticMeshComponent(UStaticMeshComponent* MeshComponent, FString ObjectNamePrefix, const bool OverrideInitialization, const bool UpdateTable, const bool OverrideAddingToLoadList, const int32 PreviousAttempts)
@@ -202,7 +247,7 @@ bool ASonoTraceUEActor::AddStaticMeshComponent(UStaticMeshComponent* MeshCompone
 					if (ObjectSettings->DisableMeshDataGeneration)
 					{
 						FName MeshName = FName(StaticMesh->GetName());
-						SkippedMeshesDueToTriangleCount.Add(MeshName, -1); 
+						SkippedMeshesDueToTriangleCount.Add(MeshName, -1);
 						UE_LOG(SonoTraceUE, Warning, TEXT("SKIPPED: StaticMesh '%s' has DisableMeshDataGeneration enabled in ObjectSettings '%s'. Mesh data will not be generated."),
 							   *StaticMesh->GetName(), *ObjectSettings->Name.ToString());
 						PersistentPrimitiveIndexToPrimitiveComponent.Add(PersistentPrimitiveIndex, MeshComponent);
@@ -270,6 +315,7 @@ bool ASonoTraceUEActor::AddStaticMeshComponent(UStaticMeshComponent* MeshCompone
 	return false;
 }
 
+// TODO: figure out skeletal nanite mesh
 bool ASonoTraceUEActor::AddSkeletalMeshComponent(USkeletalMeshComponent* MeshComponent, FString ObjectNamePrefix, const bool OverrideInitialization, const bool UpdateTable, const bool OverrideAddingToLoadList, const int32 PreviousAttempts)
 {
 	if (!Initialized && !OverrideInitialization)
@@ -418,7 +464,6 @@ bool ASonoTraceUEActor::RemoveStaticMeshComponent(UStaticMeshComponent* MeshComp
 				if (StaticMeshCounter.FindChecked(StaticMesh) == 1)
 				{
 					StaticMeshCounter.Remove(StaticMesh);
-					MeshData.RemoveAt(StaticMeshToMeshDataIndex.FindChecked(StaticMesh));
 					StaticMeshToMeshDataIndex.Remove(StaticMesh);
 					UE_LOG(SonoTraceUE, Log, TEXT("Removed StaticMesh '%s' mesh data."), *StaticMesh->GetName());
 				}
@@ -455,7 +500,6 @@ bool ASonoTraceUEActor::RemoveSkeletalMeshComponent(USkeletalMeshComponent* Mesh
 				if (SkeletalMeshCounter.FindChecked(SkeletalMesh) == 1)
 				{
 					SkeletalMeshCounter.Remove(SkeletalMesh);
-					MeshData.RemoveAt(SkeletalMeshToMeshDataIndex.FindChecked(SkeletalMesh));
 					SkeletalMeshToMeshDataIndex.Remove(SkeletalMesh);
 					UE_LOG(SonoTraceUE, Log, TEXT("Removed SkeletalMesh '%s' mesh data."), *SkeletalMesh->GetName());
 				}
@@ -1477,9 +1521,9 @@ void ASonoTraceUEActor::ParseRayTracing()
 
 					// Get the render scene to later find unknown objects
 					FScene* RenderScene = GetWorld()->Scene->GetRenderScene();
-				
+
 					// Loop the rays
-					int32 SavedPointIndex = 0;					
+					int32 SavedPointIndex = 0;
 					for (int32 RayIndex = 0; RayIndex < GeneratedSettings.AzimuthAngles.Num(); RayIndex++)
 					{
 						// Start multi-bounce loop
@@ -1505,11 +1549,17 @@ void ASonoTraceUEActor::ParseRayTracing()
 								// Check if it has line-of-sight to the sensor
 								if (CurrentRayTracingOutput.HitLineOfSightToSensor)
 								{
-									const int32 CurrentScenePrimitiveIndex = CurrentRayTracingOutput.HitScenePrimitiveIndex;
+									const int32 GpuPersistentPrimitiveIndex = CurrentRayTracingOutput.HitScenePrimitiveIndex;
 									const int32 CurrentTriangleIndex = CurrentRayTracingOutput.HitTriangleIndex;
-									int32 CurrentPersistentPrimitiveIndex = -1;
-									if (ScenePrimitiveIndexToPersistentPrimitiveIndex.Find(CurrentScenePrimitiveIndex))
-										CurrentPersistentPrimitiveIndex = ScenePrimitiveIndexToPersistentPrimitiveIndex[CurrentScenePrimitiveIndex];										
+
+									FPersistentPrimitiveIndex GpuPersistentIndexStruct;
+									GpuPersistentIndexStruct.Index = GpuPersistentPrimitiveIndex;
+									const int32 CurrentScenePrimitiveIndex = (RenderScene && GpuPersistentPrimitiveIndex >= 0) ? RenderScene->GetPrimitiveIndex(GpuPersistentIndexStruct) : -1;
+									const FPrimitiveSceneInfo* CurrentPrimitiveSceneInfo = (RenderScene && CurrentScenePrimitiveIndex >= 0 && CurrentScenePrimitiveIndex < RenderScene->Primitives.Num())
+										? RenderScene->Primitives[CurrentScenePrimitiveIndex]
+										: nullptr;
+									const FPrimitiveSceneProxy* CurrentPrimitiveSceneProxy = CurrentPrimitiveSceneInfo ? CurrentPrimitiveSceneInfo->Proxy : nullptr;
+									int32 CurrentPersistentPrimitiveIndex = CurrentPrimitiveSceneInfo ? CurrentPrimitiveSceneInfo->GetPersistentIndex().Index : -1;
 
 									// Compute the hit location in world space
 									FVector HitLocation = FVector(CurrentRayTracingOutput.HitPosX,
@@ -1555,24 +1605,15 @@ void ASonoTraceUEActor::ParseRayTracing()
 										TTuple<FName, int32> ObjectNameAndTypeIndex = PersistentPrimitiveIndexToLabelsAndObjectTypes.FindChecked(CurrentPersistentPrimitiveIndex);
 										ObjectName = ObjectNameAndTypeIndex.Get<0>();
 										ObjectTypeIndex = ObjectNameAndTypeIndex.Get<1>();
-									}else
+									}else if (CurrentPrimitiveSceneProxy)
 									{
-										if (RenderScene && CurrentScenePrimitiveIndex >= 0 && CurrentScenePrimitiveIndex < RenderScene->Primitives.Num())
-										{
-											if (const FPrimitiveSceneInfo* PrimitiveSceneInfo = RenderScene->Primitives[CurrentScenePrimitiveIndex])
-											{
-												if (const FPrimitiveSceneProxy* PrimitiveSceneProxy = PrimitiveSceneInfo->Proxy)
-												{
-													CurrentPersistentPrimitiveIndex = PrimitiveSceneInfo->GetPersistentIndex().Index;
-													FName NewObjectName = FName(PrimitiveSceneProxy->GetOwnerName().ToString() + TEXT("_") + PrimitiveSceneProxy->GetResourceName().ToString());
-													PersistentPrimitiveIndexToLabelsAndObjectTypes.Add(CurrentPersistentPrimitiveIndex, TTuple<FName, int32>(NewObjectName, 0));
-													ScenePrimitiveIndexToPersistentPrimitiveIndex.Add(CurrentScenePrimitiveIndex, CurrentPersistentPrimitiveIndex);
-													ObjectName = NewObjectName;
-													UE_LOG(SonoTraceUE, Log, TEXT("Added unknown object with PPI #%d, SPI #%d and label '%s' using resource '%s' and object type 'default (#0)'."),
-																					CurrentPersistentPrimitiveIndex, CurrentScenePrimitiveIndex, *NewObjectName.ToString(), *PrimitiveSceneProxy->GetResourceName().ToString());
-												}
-											}		
-										}
+										FName NewObjectName = FName(CurrentPrimitiveSceneProxy->GetOwnerName().ToString() + TEXT("_") + CurrentPrimitiveSceneProxy->GetResourceName().ToString());
+										PersistentPrimitiveIndexToLabelsAndObjectTypes.Add(CurrentPersistentPrimitiveIndex, TTuple<FName, int32>(NewObjectName, 0));
+										ScenePrimitiveIndexToPersistentPrimitiveIndex.Add(CurrentScenePrimitiveIndex, CurrentPersistentPrimitiveIndex);
+										ObjectName = NewObjectName;
+										const ERayTracingProxyType DebugProxyType = CurrentPrimitiveSceneProxy->GetRayTracingProxyType();
+										UE_LOG(SonoTraceUE, Log, TEXT("Added unknown object with PPI #%d, SPI #%d and label '%s' using resource '%s' and object type 'default (#0)'. RayTracingProxyType: %d"),
+																				CurrentPersistentPrimitiveIndex, CurrentScenePrimitiveIndex, *NewObjectName.ToString(), *CurrentPrimitiveSceneProxy->GetResourceName().ToString(), static_cast<int32>(DebugProxyType));
 									}
 									RayTracingSubOutput.HitPersistentPrimitiveIndexes.AddUnique(CurrentPersistentPrimitiveIndex);
 									if (PersistentPrimitiveIndexToMeshDataIndex.Contains(CurrentPersistentPrimitiveIndex))
@@ -1659,7 +1700,8 @@ void ASonoTraceUEActor::ParseRayTracing()
 					}
 					// Remove the remaining part of the struct.
 					RayTracingSubOutput.ReflectedPoints.RemoveAt(SavedPointIndex, RayTracingSubOutput.ReflectedPoints.Num() - SavedPointIndex);
-				}				
+					
+				}
 				// Unlock the buffer when done
 				GPUReadback->Unlock();
 
@@ -2185,8 +2227,6 @@ void ASonoTraceUEActor::RunSimulation(const TArray<int32> OverrideEmitterSignalI
 	CurrentOutput.MaximumStrength = FMath::Max(DirectPathSubOutput.MaximumStrength,FMath::Max(RayTracingSubOutput.MaximumStrength, DiffractionSubOutput.MaximumStrength));
 	CurrentOutput.MaximumTotalDistance = FMath::Max(DirectPathSubOutput.MaximumTotalDistance,FMath::Max(RayTracingSubOutput.MaximumTotalDistance, DiffractionSubOutput.MaximumTotalDistance));
 	
-	CurrentOutput = CurrentOutput;
-
 	if (InterfaceConnected)		
 	{
 		PrepareInterfaceMeasurementData(CurrentOutput);
@@ -2999,7 +3039,7 @@ void ASonoTraceUEActor::DrawSimulationResult()
 						
 						if (!Point.IsDirectPath)
 						{
-								FColor PointColor = InputSettings->DrawDefaultPointsColor;
+							FColor PointColor = InputSettings->DrawDefaultPointsColor;
 							float PointSize;		
 							int32 NormalizedValueForColor;
 							float NormalizedValueForSize; 
@@ -3007,6 +3047,8 @@ void ASonoTraceUEActor::DrawSimulationResult()
 							
 							switch (InputSettings->DrawPointsColorMode)
 							{
+							case ESonoTraceUESimulationDrawColorModeEnum::Static:
+								break;
 							case ESonoTraceUESimulationDrawColorModeEnum::SensorDistance:
 								NormalizedValueForColor = FMath::Clamp(FMath::RoundToInt(Point.DistanceToSensor / InputSettings->MaximumRayDistance * 255.0f), 0, 254);
 								PointColor = ColorMap[NormalizedValueForColor];
@@ -3028,8 +3070,6 @@ void ASonoTraceUEActor::DrawSimulationResult()
 								PointColor = ColorMap[NormalizedValueForColor];
 								break;
 							default:
-								NormalizedValueForColor = FMath::Clamp(FMath::RoundToInt(Point.SummedStrength / DrawPointsStrengthMaximumValue * 255.0f), 0, 254);
-								PointColor = ColorMap[NormalizedValueForColor];
 								break;
 							}
 
@@ -5484,10 +5524,12 @@ int32 ASonoTraceUEActor::GetMeshComponentTriangleCount(UMeshComponent* MeshCompo
 	UDynamicMesh* DynamicMesh = NewObject<UDynamicMesh>();
 	
 	static FGeometryScriptCopyMeshFromComponentOptions Options;
-	Options.bWantNormals = false;  
+	Options.bWantNormals = false;
 	Options.bWantTangents = false;
 	Options.bWantInstanceColors = false;
-	
+	Options.RequestedLOD.LODType = EGeometryScriptLODType::RenderData;
+	Options.RequestedLOD.LODIndex = 0;
+
 	FTransform DummyTransform;         
 	EGeometryScriptOutcomePins Outcome; 	
 	UGeometryScriptLibrary_SceneUtilityFunctions::CopyMeshFromComponent(
@@ -5520,10 +5562,12 @@ void ASonoTraceUEActor::CalculateMeshCurvature(UMeshComponent* MeshComponent, FS
    	UDynamicMesh* DynamicMesh = NewObject<UDynamicMesh>();
 	
 	static FGeometryScriptCopyMeshFromComponentOptions Options;
-	Options.bWantNormals = true;  
+	Options.bWantNormals = true;
 	Options.bWantTangents = false;
 	Options.bWantInstanceColors = false;
-	
+	Options.RequestedLOD.LODType = EGeometryScriptLODType::RenderData;
+	Options.RequestedLOD.LODIndex = 0;
+
 	FTransform DummyTransform;         
 	EGeometryScriptOutcomePins Outcome; 	
 	UGeometryScriptLibrary_SceneUtilityFunctions::CopyMeshFromComponent(
@@ -5806,7 +5850,7 @@ TArray<FSonoTraceUEObjectSettingsStruct>  ASonoTraceUEActor::PopulateObjectSetti
 
 	for (int32 FrequencyIndex = 0; FrequencyIndex < InputSettings->NumberOfSimFrequencies; ++FrequencyIndex)
 	{
-		float SurfaceBRDF = SigmoidMix(0, NewObjectSetting.BrdfTransitionSlope, SigmoidSlopeMultiplier * NewObjectSetting.BrdfTransitionPosition,
+		float SurfaceBRDF = SigmoidMix(0, SigmoidSlopeMultiplier * NewObjectSetting.BrdfTransitionSlope, NewObjectSetting.BrdfTransitionPosition,
 									   NewObjectSetting.BrdfExponentsDiffraction[FrequencyIndex], NewObjectSetting.BrdfExponentsSpecular[FrequencyIndex]);
 		float SurfaceMaterial = SigmoidMix(0, SigmoidSlopeMultiplier * NewObjectSetting.MaterialsTransitionSlope, NewObjectSetting.MaterialsTransitionPosition,
 						   NewObjectSetting.MaterialStrengthsDiffraction[FrequencyIndex], NewObjectSetting.MaterialStrengthsSpecular[FrequencyIndex]);

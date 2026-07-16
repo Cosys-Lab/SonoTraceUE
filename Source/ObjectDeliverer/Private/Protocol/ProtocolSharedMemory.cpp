@@ -120,7 +120,7 @@ bool UProtocolSharedMemory::ReceivedData()
 
 		FMemory::Memcpy(&Size, SharedMemoryData + sizeof(uint8), sizeof(uint32));
 
-		TempBuffer.SetNum(Size, false);
+		TempBuffer.SetNum(Size, EAllowShrinking::No);
 
 		FMemory::Memcpy(TempBuffer.GetData(), SharedMemoryData + sizeof(uint8) + sizeof(uint32), FMath::Min((uint32)SharedMemorySize, Size));
 	});
@@ -140,7 +140,7 @@ bool UProtocolSharedMemory::ReceivedData()
 		wantSize = PacketRule->GetWantSize();
 		auto receiveSize = wantSize == 0 ? Size : wantSize;
 
-		ReceiveBuffer.SetNum(receiveSize, false);
+		ReceiveBuffer.SetNum(receiveSize, EAllowShrinking::No);
 
 		int32 Read = 0;
 		FMemory::Memcpy(ReceiveBuffer.GetData(), TempBuffer.GetData() + Offset, receiveSize);

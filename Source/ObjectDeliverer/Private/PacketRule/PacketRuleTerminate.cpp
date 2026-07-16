@@ -21,7 +21,7 @@ void UPacketRuleTerminate::Initialize()
 
 void UPacketRuleTerminate::MakeSendPacket(const TArray<uint8>& BodyBuffer)
 {
-	BufferForSend.SetNum(BodyBuffer.Num() + Terminate.Num(), false);
+	BufferForSend.SetNum(BodyBuffer.Num() + Terminate.Num(), EAllowShrinking::No);
 
 	FMemory::Memcpy(BufferForSend.GetData(), BodyBuffer.GetData(), BodyBuffer.Num());
 	FMemory::Memcpy(BufferForSend.GetData() + BodyBuffer.Num(), Terminate.GetData(), Terminate.Num());
@@ -61,7 +61,7 @@ void UPacketRuleTerminate::NotifyReceiveData(const TArray<uint8>& DataBuffer)
 			return;
 		}
 
-		BufferForReceive.SetNum(findIndex, false);
+		BufferForReceive.SetNum(findIndex, EAllowShrinking::No);
 		FMemory::Memcpy(BufferForReceive.GetData(), ReceiveTempBuffer.GetData(), findIndex);
 		DispatchMadeReceiveBuffer(BufferForReceive);
 
