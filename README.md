@@ -11,6 +11,8 @@ SonoTraceUE is a high-fidelity acoustic simulation plugin for Unreal Engine 5 th
  - Demonstration video: [https://www.youtube.com/watch?v=_Z39IlmT22E](https://www.youtube.com/watch?v=_Z39IlmT22E)
  - Paper Preprint: [https://arxiv.org/abs/2602.19652](https://arxiv.org/abs/2602.19652)
 
+ Note that to retrieve the simulation data you will require a [API client](#api), for which we currently have one for [Matlab](https://github.com/Cosys-Lab/SonoTraceUE-Matlab-Toolbox) and [Python](https://pypi.org/project/sonotraceuepy/).
+
 ## Publication
 We kindly ask to cite our paper if you find this repository useful:
 ```
@@ -25,11 +27,10 @@ We kindly ask to cite our paper if you find this repository useful:
 
 ## Requirements
 
-- **Unreal Engine Version**: 5.4
+- **Unreal Engine Version**: 5.8
 - **Hardware Requirements**:
-  - GPU with hardware ray tracing support
-  - DirectX 12 support
-- **Operating System**: Windows for now due to DirectX 12 requirement
+  - GPU with hardware ray tracing support with up to date drivers
+- **Operating System**: Windows 11 with DirectX12 and Ubuntu 24.04 with Vulkan were tested and worked
 
 Hardware ray tracing **must** be enabled in Unreal Engine for this plugin to function correctly:
 
@@ -58,12 +59,24 @@ You can add it directly through the Place Actors panel or through a blueprint as
 
 ## Usage Tips
 
+### Excluding an actor entirely
+
+To exclude an actor entirely from the SonoTraceUE mesh analysis system (no registration, no mesh data generation, never appears in hit output) - for example a decorative sky dome/backdrop that shouldn't participate in the acoustic simulation at all - add the Actor Tag `SonoTraceUEIgnore` to it (Details panel → Tags). It will be skipped as soon as it's added to the system (e.g. during initial actor scanning, or via `AddActor`).
+
 ### Skeletal Meshes and Diffraction
 
 By default, skeletal meshes should have diffraction disabled as the diffraction is based on the initial frame pre-calculation location of all triangles, and animations and deformations are not taking into account. Enable with:
 ```cpp
 InputSettings->EnableDiffractionForDynamicObjects = true;
 ```
+
+Note that Nanite skeletal meshes are currently not supported by Unreal Engine's ray/path tracing so these meshes will also not work for SonoTraceUE simulation.
+
+### Nanite Static Meshes
+
+SonoTraceUE's per-triangle material data is precomputed from a mesh's original render data, and ray hits are matched back to that data by triangle index. For Nanite static meshes, this only lines up correctly when ray tracing uses Nanite's fixed fallback proxy mesh,the other two current Nanite ray tracing modes (streamed-out mesh, and CLAS/cluster acceleration structures) rebuild a different, LOD-varying mesh at runtime whose triangle indices do not correspond to the precomputed data, causing mismatched or out-of-bounds lookups.
+
+This project's `Config/DefaultEngine.ini` sets `r.RayTracing.Nanite.Mode=0` (fallback mesh) to enforce this,this setting is **required** for correct SonoTraceUE results on Nanite static meshes and should not be changed. 
 
 ### Coordinate System
 
@@ -732,13 +745,25 @@ Optimization: only calculates BRDF for the final bounce of each ray.
 
 ---
 
+### Object Settings Configuration
+
 ```cpp
-UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Configuration|Simulation|General")
+UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Configuration|Simulation|Objects")
 int32 MeshDataGenerationAttempts
 ```
 Number of ticks to attempt mesh data generation before timeout (default: 5).
 
-### Object Settings Configuration
+---
+
+```cpp
+UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Configuration|Simulation|Objects")
+int32 MeshDataGenerationTriangleMaximum
+```
+Set a maximum triangle count for the generated mesh data of manually added objects.
+If the generated mesh data exceeds this count, it will be discarded to avoid performance issues. 
+Set this to 0 to disable this check. (default: 0).
+
+---
 
 ```cpp
 UPROPERTY(EditAnywhere, Category = "SonoTraceUE|Configuration|Simulation|Objects")
@@ -749,12 +774,13 @@ References a DataTable with row type `FSonoTraceUEObjectSettingsTable` for per-o
 
 **FSonoTraceUEObjectSettingsTable Structure**:
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `Asset` | `UObject*` | Reference to StaticMesh or SkeletalMesh |
-| `Description` | `FString` | Human-readable description |
-| `ObjectSettings` | `FSonoTraceUEObjectSettingsOriginStruct` | Acoustic properties (see below) |
+| Field | Type | Description                                   |
+|-------|------|-----------------------------------------------|
+| `Asset` | `UObject*` | Reference to StaticMesh or SkeletalMesh       |
+| `Description` | `FString` | Human-readable description                    |
+| `ObjectSettings` | `FSonoTraceUEObjectSettingsOriginStruct` | Acoustic properties (see below)               |
 | `DrawDebugFirstOccurrence` | `bool` | Enable debug visualization for first instance |
+| `DisableMeshDataGeneration` | `bool` | Disable the mesh generation for this mesh     |
 
 ---
 
@@ -1442,10 +1468,16 @@ Contains processed/generated settings derived from InputSettings.
 ## API
 
 A socket-based API is available to access SonoTraceUE with third-party tools. 
-Currently a Matlab Client API is available [here](https://github.com/Cosys-Lab/SonoTraceUE-Matlab-Toolbox). You will find more information there on how to control the simulation from the API client.
+The `USonoTraceUEInterfaceSettingsData` class configures the TCP/IP network interface for external control and data acquisition.
+
 The _Default_ example level in the sample project is ideal for testing with example code in the Client API tools.
 
-The `USonoTraceUEInterfaceSettingsData` class configures the TCP/IP network interface for external control and data acquisition.
+### Matlab
+Currently a Matlab Client API is available [here](https://github.com/Cosys-Lab/SonoTraceUE-Matlab-Toolbox), also to be found on [the Mathworks File Exchange for installation](https://www.mathworks.com/matlabcentral/fileexchange/183020-sonotraceue-matlab-toolbox). 
+
+### Python
+Currently a Python Client API is available [here](https://github.com/Cosys-Lab/sonotraceuepy). You will find more information there on how to control the simulation from the API client.
+It is also easy to install from pip with `pip install sonotraceuepy`.
 
 ### Properties
 

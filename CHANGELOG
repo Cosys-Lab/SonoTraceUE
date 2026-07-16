@@ -3,6 +3,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Released]
 
+## [4.0.0] - 2026-07-16
+- Upgraded to Unreal Engine 5.8 with support for Linux systems through Vulkan. 
+- Added Python API Client (https://github.com/Cosys-Lab/sonotraceuepy).
+
 ## [3.1.0] - 2026-02-24
 - Added links to paper preprint and video. 
 - Added maximum threshold to mesh triangle count to prevent long computation times and memory usage for high resolution meshes. 

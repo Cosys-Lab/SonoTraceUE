@@ -14,6 +14,8 @@
 #include "Engine/DataAsset.h"
 #include "Curves/CurveFloat.h"
 #include "GameFramework/Actor.h"
+
+class ULandscapeComponent;
 #pragma warning(disable: 4668)
 #include "ObjectDeliverer/Public/DeliveryBox/Utf8StringDeliveryBox.h"
 #include "ObjectDeliverer/Public/DeliveryBox/ObjectDeliveryBoxUsingJson.h"
@@ -135,7 +137,7 @@ struct SONOTRACEUE_API FSonoTraceUEObjectSettingsTable : public FTableRowBase
 	GENERATED_BODY()
 
 	// Currently, only StaticMesh and SkeletalMesh are supported
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(AllowedClasses = "StaticMesh,SkeletalMesh"), Category = "SonoTraceUE")
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(AllowedClasses = "/Script/Engine.StaticMesh,/Script/Engine.SkeletalMesh"), Category = "SonoTraceUE")
     UObject* Asset = nullptr;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SonoTraceUE")
@@ -1158,6 +1160,18 @@ public:
 	*/
 	UFUNCTION(BlueprintCallable, Category = "SonoTraceUE", meta=(HidePin = "OverrideInitialization, UpdateTable, OverrideAddingToLoadList, PreviousAttempts"))
 	bool AddSkeletalMeshComponent(USkeletalMeshComponent* MeshComponent, FString ObjectNamePrefix, const bool OverrideInitialization = false, const bool UpdateTable = true, const bool OverrideAddingToLoadList = false, const int32 PreviousAttempts = 0);
+
+	/**
+	* Add a LandscapeComponent to the SonoTraceUE mesh analysis system.
+	* Landscape components have no StaticMesh asset to analyze, so per-triangle curvature/BRDF/material data
+	* is not generated for them (same limitation as Nanite meshes) - they are registered with a proper
+	* label/object-type and always use the object type's default acoustic properties for hits.
+	* @param LandscapeComponent The new LandscapeComponent to add.
+	* @param ObjectNamePrefix The prefix to add to the label of this component. Usually this is the name of the Actor that owns this component.
+	* @return Returns true if the landscape component was successfully added.
+	*/
+	UFUNCTION(BlueprintCallable, Category = "SonoTraceUE", meta=(HidePin = "OverrideInitialization, UpdateTable"))
+	bool AddLandscapeComponent(ULandscapeComponent* LandscapeComponent, FString ObjectNamePrefix, const bool OverrideInitialization = false, const bool UpdateTable = true);
 
 	/**
 	* Remove an Actor from the SonoTraceUE mesh analysis system.
