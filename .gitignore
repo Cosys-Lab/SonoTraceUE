@@ -77,3 +77,6 @@ DerivedDataCache/*
 /.idea/*
 .editorconfig
 EmptyTestEnvironment.uproject.DotSettings.user
+/.vscode/*
+.ignore
+*.code-workspace

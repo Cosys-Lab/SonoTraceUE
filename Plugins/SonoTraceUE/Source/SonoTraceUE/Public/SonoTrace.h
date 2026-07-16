@@ -68,8 +68,7 @@ public:
 	
 private:
 	void Execute_RenderThread(FPostOpaqueRenderParameters& Parameters);
-	static void BindSonoTraceCHSBindings(FRHICommandList& RHICmdList, const FViewInfo& View, FRHIRayTracingScene* RHIScene, FRHIUniformBuffer* SceneUniformBuffer, FRayTracingPipelineState* PipelineState);
-	
+
 	FDelegateHandle SonoTraceRenderDelegate;
 	FSonoTraceParameters CachedParams;
 	volatile bool bCachedParamsAreValid = false;

@@ -3,7 +3,7 @@
 #include "PacketRule/PacketRuleSizeBody.h"
 #include "PacketRule/PacketRuleFactory.h"
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FPacketRuleSizeBodyTest_MakeSendPacket, "ObjectDeliverer.PacketRuleTests.FPacketRuleSizeBodyTest.MakeSendPacket", EAutomationTestFlags::ApplicationContextMask | EAutomationTestFlags::SmokeFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FPacketRuleSizeBodyTest_MakeSendPacket, "ObjectDeliverer.PacketRuleTests.FPacketRuleSizeBodyTest.MakeSendPacket", EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::SmokeFilter)
 
 bool FPacketRuleSizeBodyTest_MakeSendPacket::RunTest(const FString& Parameters)
 {
@@ -74,7 +74,7 @@ bool FPacketRuleSizeBodyTest_MakeSendPacket::RunTest(const FString& Parameters)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FPacketRuleSizeBodyTest_NotifyReceiveData, "ObjectDeliverer.PacketRuleTests.FPacketRuleSizeBodyTest.NotifyReceiveData", EAutomationTestFlags::ApplicationContextMask | EAutomationTestFlags::SmokeFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FPacketRuleSizeBodyTest_NotifyReceiveData, "ObjectDeliverer.PacketRuleTests.FPacketRuleSizeBodyTest.NotifyReceiveData", EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::SmokeFilter)
 
 bool FPacketRuleSizeBodyTest_NotifyReceiveData::RunTest(const FString& Parameters)
 {
