@@ -109,6 +109,13 @@ void FSonoTrace::Execute_RenderThread(FPostOpaqueRenderParameters& Parameters)
 {
 	if (!CachedParams.Scene || !CachedParams.Scene->RayTracingScene.IsCreated()) return;
 
+	// PostOpaqueRender fires once per FSceneView rendered this frame. Camera sensors (scene captures)
+	// render their own views through the same delegate, and this class' dispatch state (buffer refs,
+	// RunState, LastExecutionTime) is not scoped per-view, so processing anything other than the
+	// primary view here corrupts the RDG pass parameters built from a mismatched/stale view.
+	if (!Parameters.View || Parameters.View->bIsSceneCapture || Parameters.View->bIsReflectionCapture || Parameters.View->bIsPlanarReflection)
+		return;
+
 	FRDGBuilder* GraphBuilder = Parameters.GraphBuilder;
 
 	//If there are no cached parameters to use, skip
@@ -145,7 +152,19 @@ void FSonoTrace::Execute_RenderThread(FPostOpaqueRenderParameters& Parameters)
 	if (!ComputeShader.IsValid())
 		return;
 
+	// The view handle is only meaningful for the scene the view was rendered with; if this view belongs
+	// to a different FScene than the one cached from the game thread (editor viewport, capture worlds),
+	// the handle would index a foreign RayTracingScene view array.
+	const FScene* ViewScene = Parameters.View->Family && Parameters.View->Family->Scene ? Parameters.View->Family->Scene->GetRenderScene() : nullptr;
+	if (ViewScene != CachedParams.Scene)
+		return;
+
+	// Views that did not register with the ray tracing scene this frame carry an invalid handle;
+	// GetLayerView() would assert (unchecked array index / null SRV checkf) on it.
 	const FRayTracingScene::FViewHandle& ViewHandle = Parameters.View->GetRayTracingSceneViewHandle();
+	if (!ViewHandle.IsValid())
+		return;
+
 	const FRDGBufferSRVRef LayerView = CachedParams.Scene->RayTracingScene.GetLayerView(ERayTracingSceneLayer::Base, ViewHandle);
 	if (!LayerView)
 		return;
