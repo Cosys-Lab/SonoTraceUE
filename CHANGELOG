@@ -3,6 +3,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Released]
 
+## [4.0.1] - 2026-07-17
+- Fixes to raytracing pipeline for compatibility with Cosys-AirSim (https://github.com/Cosys-Lab/Cosys-AirSim).
+
 ## [4.0.0] - 2026-07-16
 - Upgraded to Unreal Engine 5.8 with support for Linux systems through Vulkan. 
 - Added Python API Client (https://github.com/Cosys-Lab/sonotraceuepy).
