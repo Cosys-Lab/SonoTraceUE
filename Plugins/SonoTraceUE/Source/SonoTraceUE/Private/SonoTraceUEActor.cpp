@@ -22,6 +22,15 @@
 #include "Kismet/KismetSystemLibrary.h"
 #include "Rendering/SkeletalMeshRenderData.h"
 
+namespace
+{
+	// Air absorption coefficient in dB/m for a frequency in Hz. Clamped at 0 because the linear fit goes negative below ~7.9 kHz, which would add gain.
+	float GetAirAbsorptionAlpha(const float FrequencyHz)
+	{
+		return FMath::Max(0.0f, 0.038f * (FrequencyHz / 1000.0f) - 0.3f);
+	}
+}
+
 // Sets default values
 ASonoTraceUEActor::ASonoTraceUEActor()
 {
@@ -1536,9 +1545,10 @@ void ASonoTraceUEActor::ParseRayTracing()
 					for (int32 RayIndex = 0; RayIndex < GeneratedSettings.AzimuthAngles.Num(); RayIndex++)
 					{
 						// Start multi-bounce loop
-						bool CurrentRayIsHitting = false;						
+						bool CurrentRayIsHitting = false;
 						TArray<float> CachedSourceDirectivities;
-						CachedSourceDirectivities.Init(1.0f, EmitterPoses.Num());						
+						CachedSourceDirectivities.Init(1.0f, EmitterPoses.Num());
+						const int32 FirstSavedIndexForRay = SavedPointIndex;
 						for (int32 BounceIndex = 0; BounceIndex < InputSettings->MaximumBounces; BounceIndex++)
 						{
 							// Compute the output index for this ray and this bounce
@@ -1670,11 +1680,12 @@ void ASonoTraceUEActor::ParseRayTracing()
 								}
 							}
 							else{
-								if (CurrentRayIsHitting)
-									RayTracingSubOutput.ReflectedPoints[SavedPointIndex - 1].IsLastHit = true;
 								break;
 							}
 						}
+						// Mark the last saved point of this ray, also when every bounce was a hit
+						if (SavedPointIndex > FirstSavedIndexForRay)
+							RayTracingSubOutput.ReflectedPoints[SavedPointIndex - 1].IsLastHit = true;
 					}
 					if (InputSettings->EnableDirectPathComponentCalculation)
 					{
@@ -1824,14 +1835,13 @@ void ASonoTraceUEActor::RunSimulation(const TArray<int32> OverrideEmitterSignalI
 						ReceiverDirectivity = FMath::Max(0.0f, ReceiverDirectivity);
 					}
 
-					// Path loss (geometrical spreading loss) in meters
-					const float ReflectionStrengthPathLoss = 1.0f / FMath::Square(TotalDistancesToReceivers[EmitterIndex][ReceiverIndex] / 100.0f);
+					const float ReflectionStrengthPathLoss = 1.0f / (TotalDistancesToReceivers[EmitterIndex][ReceiverIndex] / 100.0f);
 
-					// Loop the simulation frequencies and calculate the specular reflection strength with the BRDF
+					// Loop the simulation frequencies and calculate the direct path strength
 					Strengths[EmitterIndex][ReceiverIndex].Init(0, InputSettings->NumberOfSimFrequencies);
 					for (int32 FrequencyIndex = 0; FrequencyIndex < InputSettings->NumberOfSimFrequencies; FrequencyIndex++)
 					{					
-						const float AlphaAbsorption = 0.038 * (GeneratedSettings.Frequencies[FrequencyIndex] / 1000) - 0.3;
+						const float AlphaAbsorption = GetAirAbsorptionAlpha(GeneratedSettings.Frequencies[FrequencyIndex]);
 						const float PathlossAbsorption = FMath::Pow(10.0f, -(AlphaAbsorption * TotalDistancesToReceivers[EmitterIndex][ReceiverIndex] / 100) / 20);
 						const float Strength = InputSettings->DirectPathStrength * ReflectionStrengthPathLoss * PathlossAbsorption * EmitterDirectivity * ReceiverDirectivity;
 						Strengths[EmitterIndex][ReceiverIndex][FrequencyIndex] = Strength;
@@ -1839,7 +1849,8 @@ void ASonoTraceUEActor::RunSimulation(const TArray<int32> OverrideEmitterSignalI
 					}
 				}				
 			}
-			SummedStrength = SummedStrength / ReceiverPoses.Num() / EmitterPoses.Num() / InputSettings->NumberOfSimFrequencies;
+			// Only this emitter was summed, so do not divide by the emitter count
+			SummedStrength = SummedStrength / ReceiverPoses.Num() / InputSettings->NumberOfSimFrequencies;
 			if (SummedStrength > DirectPathSubOutput.MaximumStrength)
 				DirectPathSubOutput.MaximumStrength = SummedStrength;
 
@@ -1900,6 +1911,9 @@ void ASonoTraceUEActor::RunSimulation(const TArray<int32> OverrideEmitterSignalI
 			{
 				if (PersistentPrimitiveIndexToMeshDataIndex.Contains(PersistentPrimitiveIndex))
 				{
+					// Skeletal meshes only take part in diffraction when enabled, since their data ignores the animation pose
+					if (!InputSettings->EnableDiffractionForDynamicObjects && Cast<USkeletalMeshComponent>(PersistentPrimitiveIndexToPrimitiveComponent.FindChecked(PersistentPrimitiveIndex)))
+						continue;
 					TTuple<FName, int32> ObjectNameAndTypeIndex = PersistentPrimitiveIndexToLabelsAndObjectTypes.FindChecked(PersistentPrimitiveIndex);
 					FName ObjectName = ObjectNameAndTypeIndex.Get<0>();
 					int32 ObjectTypeIndex = ObjectNameAndTypeIndex.Get<1>();
@@ -2069,7 +2083,7 @@ void ASonoTraceUEActor::RunSimulation(const TArray<int32> OverrideEmitterSignalI
 						float DotProduct = FVector::DotProduct(DiffractionNormals[SampleIndex], VectorEmitterToDiffractionNormed[EmitterIndex][SampleIndex]);
 						DotProduct = FMath::Clamp(DotProduct, -1.0f, 1.0f);
 						float Angle = FMath::RadiansToDegrees(FMath::Acos(DotProduct));
-						if (Angle > 90 && Angle < 270)
+						if (Angle > 90)
 						{
 							PointIsValidOnce = true;
 							break;
@@ -2129,7 +2143,7 @@ void ASonoTraceUEActor::RunSimulation(const TArray<int32> OverrideEmitterSignalI
 						float DotProduct = FVector::DotProduct(DiffractionNormals[Cand.SampleIndex], VectorEmitterToDiffractionNormed[EmitterIndex][Cand.SampleIndex]);
 						DotProduct = FMath::Clamp(DotProduct, -1.0f, 1.0f);
 						float Angle = FMath::RadiansToDegrees(FMath::Acos(DotProduct));
-						if (Angle > 90 && Angle < 270)
+						if (Angle > 90)
 						{
 							VectorEmitterValidAngle[EmitterIndex] = true;
 							VectorEmitterToDiffractionDistance[EmitterIndex] = FVector::Dist(PointLocation, EmitterPoses[EmitterIndex].GetLocation());
@@ -2150,6 +2164,12 @@ void ASonoTraceUEActor::RunSimulation(const TArray<int32> OverrideEmitterSignalI
 						for (int32 ReceiverIndex = 0; ReceiverIndex < CachedNumReceivers; ++ReceiverIndex)
 						{
 							NewPoint.Strengths[EmitterIndex][ReceiverIndex].Init(0, CachedNumFrequencies);
+						}
+						// Emitters that cannot see this surface side contribute nothing
+						if (!VectorEmitterValidAngle[EmitterIndex])
+							continue;
+						for (int32 ReceiverIndex = 0; ReceiverIndex < CachedNumReceivers; ++ReceiverIndex)
+						{
 							for (int32 FreqIndex = 0; FreqIndex < CachedNumFrequencies; ++FreqIndex)
 							{
 								FVector ReceiverLocation = ReceiverPoses[ReceiverIndex].GetLocation();
@@ -2159,7 +2179,7 @@ void ASonoTraceUEActor::RunSimulation(const TArray<int32> OverrideEmitterSignalI
 								NewPoint.TotalDistancesToReceivers[EmitterIndex][ReceiverIndex] = FullDistance;
 								float FullDistanceMeters = FullDistance / 100.0f;
 								float PathLossDiff = 1.0f / FMath::Square(FullDistanceMeters);
-								float AlphaAbsorption = 0.038f * (CachedFrequencies[FreqIndex] / 1000.0f) - 0.3f;
+								float AlphaAbsorption = GetAirAbsorptionAlpha(CachedFrequencies[FreqIndex]);
 								float PathLossAbsorption = FMath::Pow(10.0f, -(AlphaAbsorption * FullDistanceMeters) / 20.0f);
 								float Strength = CachedMaterialStrengthsDiffraction[FreqIndex] * PathLossDiff * PathLossAbsorption;
 								NewPoint.Strengths[EmitterIndex][ReceiverIndex][FreqIndex] = Strength;
@@ -2260,6 +2280,8 @@ void ASonoTraceUEActor::RunSpecularComponentSimulation(FSonoTraceUESubOutputStru
 				ReflectedPoint.TotalDistancesToReceivers[EmitterIndex].Init(0, CurrentReceiverPoses.Num());
 			}
 			
+			// Reset once per point so the sum covers every receiver, emitter and frequency
+			ReflectedPoint.SummedStrength = 0;
 			for (int32 ReceiverIndex = 0; ReceiverIndex < CurrentReceiverPoses.Num(); ++ReceiverIndex)
 			{
 				if (const FTransform& ReceiverPose = CurrentReceiverPoses[ReceiverIndex]; !ReceiverPose.GetLocation().ContainsNaN())
@@ -2301,14 +2323,13 @@ void ASonoTraceUEActor::RunSpecularComponentSimulation(FSonoTraceUESubOutputStru
 	
 						// Loop the simulation frequencies and calculate the specular reflection strength with the BRDF
 						ReflectedPoint.Strengths[EmitterIndex][ReceiverIndex].Init(0, CurrentInputSettings->NumberOfSimFrequencies);
-						ReflectedPoint.SummedStrength = 0;
 						for (int32 FrequencyIndex = 0; FrequencyIndex < CurrentInputSettings->NumberOfSimFrequencies; FrequencyIndex++)
 						{
 							const float SurfaceBRDF = (*ReflectedPoint.SurfaceBRDF)[FrequencyIndex];
 							const float SurfaceBRDFExponent = -1/ (2 * SurfaceBRDF * SurfaceBRDF);
 							const float SurfaceMaterial = (*ReflectedPoint.SurfaceMaterial)[FrequencyIndex];
-							float AlphaAbsorption = 0.038 * (CurrentGeneratedSettings->Frequencies[FrequencyIndex] / 1000) - 0.3;
-							const float PathlossAbsorption = FMath::Pow(10.0f, -(AlphaAbsorption * ReflectedPoint.TotalDistance / 100) / 20);
+							const float AlphaAbsorption = GetAirAbsorptionAlpha(CurrentGeneratedSettings->Frequencies[FrequencyIndex]);
+							const float PathlossAbsorption = FMath::Pow(10.0f, -(AlphaAbsorption * TotalDistanceToSensor / 100) / 20);
 							const float ReflectionStrengthBRDF = exp(SurfaceBRDFExponent * (AngleReflection * AngleReflection));
 							const float Strength = ReflectionStrengthBRDF * ReflectionStrengthPathLoss * SurfaceMaterial * PathlossAbsorption * ReceiverDirectivity * SourceDirectivity;								
 							ReflectedPoint.Strengths[EmitterIndex][ReceiverIndex][FrequencyIndex] = Strength;
@@ -2319,13 +2340,12 @@ void ASonoTraceUEActor::RunSpecularComponentSimulation(FSonoTraceUESubOutputStru
 			}
 			ReflectedPoint.SummedStrength = ReflectedPoint.SummedStrength / CurrentReceiverPoses.Num() / CurrentEmitterPoses.Num() / CurrentInputSettings->NumberOfSimFrequencies;
 			CurrentRayTracingSubOutput->ReflectedStrengths[ReflectedPointIndex] = ReflectedPoint.SummedStrength;
-			if (ReflectedPoint.SummedStrength > CurrentRayTracingSubOutput->MaximumStrength)
-				CurrentRayTracingSubOutput->MaximumStrength = ReflectedPoint.SummedStrength;
-			if (CurrentInputSettings->PointsInSensorFrame)
-			{    
-				ReflectedPoint.Location = CurrentWorldToSensorTransform.TransformPosition(ReflectedPoint.Location);
-				ReflectedPoint.ReflectionDirection = CurrentWorldToSensorTransform.TransformVector(ReflectedPoint.ReflectionDirection);
-			}
+		}
+		// Also convert points that were skipped so all output points share the same frame
+		if (CurrentInputSettings->PointsInSensorFrame)
+		{
+			ReflectedPoint.Location = CurrentWorldToSensorTransform.TransformPosition(ReflectedPoint.Location);
+			ReflectedPoint.ReflectionDirection = CurrentWorldToSensorTransform.TransformVector(ReflectedPoint.ReflectionDirection);
 		}
 	}
 	);
@@ -2339,6 +2359,12 @@ void ASonoTraceUEActor::RunSpecularComponentSimulation(FSonoTraceUESubOutputStru
 				CurrentRayTracingSubOutput->ReflectedStrengths.RemoveAt(ReflectedPointIndex);
 			}
 		}
+	}
+	// Done after the parallel loop (and the minimum strength filter) to avoid a data race and match the output points
+	for (const float Strength : CurrentRayTracingSubOutput->ReflectedStrengths)
+	{
+		if (Strength > CurrentRayTracingSubOutput->MaximumStrength)
+			CurrentRayTracingSubOutput->MaximumStrength = Strength;
 	}
 }
 
@@ -4856,6 +4882,7 @@ void ASonoTraceUEActor::RunDebugRayTracingParsing(int32 MaxBounces, int32 Actual
 		bool CurrentRayIsHitting = false;
 		TArray<float> CachedSourceDirectivities;
 		CachedSourceDirectivities.Init(1.0f, ActualEmitterCount);
+		const int32 FirstSavedIndexForRay = SavedPointIndex;
 
 		for (int32 BounceIndex = 0; BounceIndex < MaxBounces; ++BounceIndex)
 		{
@@ -4928,11 +4955,12 @@ void ASonoTraceUEActor::RunDebugRayTracingParsing(int32 MaxBounces, int32 Actual
 			}
 			else
 			{
-				if (CurrentRayIsHitting)
-					ParseTestRayTracingSubOutput.ReflectedPoints[SavedPointIndex - 1].IsLastHit = true;
 				break;
 			}
 		}
+		// Mark the last saved point of this ray, also when every bounce was a hit
+		if (SavedPointIndex > FirstSavedIndexForRay)
+			ParseTestRayTracingSubOutput.ReflectedPoints[SavedPointIndex - 1].IsLastHit = true;
 	}
 
 	ParseTestRayTracingSubOutput.ReflectedPoints.RemoveAt(SavedPointIndex, ParseTestRayTracingSubOutput.ReflectedPoints.Num() - SavedPointIndex);
@@ -5040,7 +5068,7 @@ void ASonoTraceUEActor::RunDebugDiffractionSimulation(int32 NumberOfInitialRays,
 
 					float FullDistanceMeters = FullDistance / 100.0f;
 					float PathLossDiff = 1.0f / FMath::Square(FMath::Max(FullDistanceMeters, 0.01f));
-					float AlphaAbsorption = 0.038f * (GeneratedSettings.Frequencies[FreqIndex] / 1000.0f) - 0.3f;
+					float AlphaAbsorption = GetAirAbsorptionAlpha(GeneratedSettings.Frequencies[FreqIndex]);
 					float PathLossAbsorption = FMath::Pow(10.0f, -(AlphaAbsorption * FullDistanceMeters) / 20.0f);
 
 					float Strength = GeneratedSettings.ObjectSettings[0].MaterialStrengthsDiffraction[FreqIndex] *
@@ -5217,7 +5245,7 @@ void ASonoTraceUEActor::RunDebugDiffractionSimulationNew(int32 NumberOfInitialRa
 
 					float FullDistanceMeters = FullDistance / 100.0f;
 					float PathLossDiff = 1.0f / FMath::Square(FMath::Max(FullDistanceMeters, 0.01f));
-					float AlphaAbsorption = 0.038f * (CachedFrequencies[FreqIndex] / 1000.0f) - 0.3f;
+					float AlphaAbsorption = GetAirAbsorptionAlpha(CachedFrequencies[FreqIndex]);
 					float PathLossAbsorption = FMath::Pow(10.0f, -(AlphaAbsorption * FullDistanceMeters) / 20.0f);
 
 					float Strength = CachedMaterialStrengthsDiffraction[FreqIndex] * PathLossDiff * PathLossAbsorption;
@@ -5847,8 +5875,8 @@ TArray<FSonoTraceUEObjectSettingsStruct>  ASonoTraceUEActor::PopulateObjectSetti
 	NewObjectSetting.BrdfTransitionSlope = InputSettings->ObjectSettingsDefault.BrdfTransitionSlope;
 	NewObjectSetting.BrdfExponentsSpecular = GenerateLinearSpacedArray(InputSettings->ObjectSettingsDefault.BrdfExponentSpecularStart, InputSettings->ObjectSettingsDefault.BrdfExponentSpecularEnd, InputSettings->NumberOfSimFrequencies);
 	NewObjectSetting.BrdfExponentsDiffraction = GenerateLinearSpacedArray(InputSettings->ObjectSettingsDefault.BrdfExponentDiffractionStart, InputSettings->ObjectSettingsDefault.BrdfExponentDiffractionEnd, InputSettings->NumberOfSimFrequencies);
-	NewObjectSetting.MaterialsTransitionPosition = 0.4;
-	NewObjectSetting.MaterialsTransitionSlope = 2;
+	NewObjectSetting.MaterialsTransitionPosition = InputSettings->ObjectSettingsDefault.MaterialsTransitionPosition;
+	NewObjectSetting.MaterialsTransitionSlope = InputSettings->ObjectSettingsDefault.MaterialSTransitionSlope;
 	NewObjectSetting.MaterialStrengthsSpecular = GenerateLinearSpacedArray(InputSettings->ObjectSettingsDefault.MaterialStrengthSpecularStart, InputSettings->ObjectSettingsDefault.MaterialStrengthSpecularEnd, InputSettings->NumberOfSimFrequencies);
 	NewObjectSetting.MaterialStrengthsDiffraction = GenerateLinearSpacedArray(InputSettings->ObjectSettingsDefault.MaterialStrengthDiffractionStart, InputSettings->ObjectSettingsDefault.MaterialStrengthDiffractionEnd, InputSettings->NumberOfSimFrequencies);
 
@@ -5981,11 +6009,12 @@ TArray<FVector> ASonoTraceUEActor::PopulatePositions(const bool EnableTable, con
 void ASonoTraceUEActor::SampleHorizontalSlice(int NumRays, const float LowerAzimuthLimit, const float UpperAzimuthLimit, TArray<float> &AzimuthAngles, TArray<float> &ElevationAngles, bool EnableRadians) {
 	NumRays = -NumRays;
 
-	const float AngleStep =(UpperAzimuthLimit - LowerAzimuthLimit) / (NumRays - 1);
+	// A single ray has no step, so it is placed at the centre of the limits
+	const float AngleStep = NumRays > 1 ? (UpperAzimuthLimit - LowerAzimuthLimit) / (NumRays - 1) : 0.0f;
 	for (auto i = 0; i < NumRays; ++i)
 	{
-		float Angle = LowerAzimuthLimit + i * AngleStep;
-		if (EnableRadians) FMath::DegreesToRadians(Angle);
+		float Angle = NumRays > 1 ? LowerAzimuthLimit + i * AngleStep : (LowerAzimuthLimit + UpperAzimuthLimit) / 2.0f;
+		if (EnableRadians) Angle = FMath::DegreesToRadians(Angle);
 		AzimuthAngles.Add(Angle);
 		ElevationAngles.Add(0);
 	}

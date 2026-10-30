@@ -3,6 +3,19 @@ All notable changes to this project will be documented in this file.
 
 ## [Released]
 
+## [4.1.0] - 2026-10-28
+- Added link to peer-reviewed publication.
+- Fixed direct path summed strength being divided by the number of emitters.
+- Fixed emitter path length skipping intermediate bounces for the third bounce and later.
+- Fixed horizontal slice rays using degrees instead of radians. A single ray no longer gives NaN.
+- Fixed summed strength of specular points only keeping the last emitter and receiver pair.
+- Fixed diffraction counting emitters that cannot see the surface.
+- Fixed specular points skipped by only-last-hits staying in the world frame.
+- Fixed data race on the maximum strength of the specular component.
+- Fixed EnableDiffractionForDynamicObjects not being used. Skeletal meshes are now skipped for diffraction unless enabled.
+- Fixed default object material transition ignoring the settings.
+- Fixed specular air absorption using the sensor distance instead of the emitter to receiver path.
+
 ## [4.0.1] - 2026-07-17
 - Fixes to raytracing pipeline for compatibility with Cosys-AirSim (https://github.com/Cosys-Lab/Cosys-AirSim).
 
