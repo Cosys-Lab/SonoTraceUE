@@ -8,19 +8,20 @@ This branch has only the plugin source code. See other branches that also includ
 SonoTraceUE is a high-fidelity acoustic simulation plugin for Unreal Engine 5 that leverages hardware-accelerated ray tracing to simulate ultrasonic sensor behavior in complex 3D environments. The plugin provides physically-based acoustic propagation modeling, including specular reflection, diffraction components, and direct path transmission, making it suitable for research in robotics, autonomous systems, and acoustic sensor development. It has an API extension so it can be interfaced with from a external API client. 
 
  - Demonstration video: [https://www.youtube.com/watch?v=_Z39IlmT22E](https://www.youtube.com/watch?v=_Z39IlmT22E)
- - Paper Preprint: [https://arxiv.org/abs/2602.19652](https://arxiv.org/abs/2602.19652)
-
+ - Open-access journal paper: [https://ieeexplore.ieee.org/document/11762357](https://ieeexplore.ieee.org/document/11762357)
+ - Paper preprint: [https://arxiv.org/abs/2602.19652](https://arxiv.org/abs/2602.19652)
+ 
  Note that to retrieve the simulation data you will require a [API client](#api), for which we currently have one for [Matlab](https://github.com/Cosys-Lab/SonoTraceUE-Matlab-Toolbox) and [Python](https://pypi.org/project/sonotraceuepy/).
 
 ## Publication
-We kindly ask to cite our paper if you find this repository useful:
+We kindly ask to cite our [open-access paper](https://ieeexplore.ieee.org/document/11762357) if you find this repository useful:
 ```
-@article{jansen2026sonotraceue,
-  title={Hardware-Accelerated Geometrical Simulation of Biological and Engineered In-Air Ultrasonic Systems}, 
+@ARTICLE{11762357,
   author={Jansen, Wouter and Steckel, Jan},
+  journal={IEEE Open Journal of Ultrasonics, Ferroelectrics, and Frequency Control}, 
+  title={Hardware-Accelerated Geometrical Simulation of Biological and Engineered In-Air Ultrasonic Systems}, 
   year={2026},
-  url={https://arxiv.org/abs/2602.19652},
-  doi={10.48550/arXiv.2602.19652},
+  doi={10.1109/OJUFFC.2026.3748392}
 }
 ```
 
