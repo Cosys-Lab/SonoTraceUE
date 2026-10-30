@@ -234,7 +234,9 @@ void SonoTraceCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 							OutputBuffer[OutputIndex].IsHit = false;
 						}else
 						{
-							OutputBuffer[OutputIndex].DistancesFromEmitterTotal[EmitterIndex] = CurrentDistanceFromEmitter + HitT;
+							// Keep the running total so later bounces include every segment
+							DistanceFromEmitterSoFar[EmitterIndex] = CurrentDistanceFromEmitter + HitT;
+							OutputBuffer[OutputIndex].DistancesFromEmitterTotal[EmitterIndex] = DistanceFromEmitterSoFar[EmitterIndex];
 						}
 					}
 				}
